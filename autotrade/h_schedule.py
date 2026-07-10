@@ -10,7 +10,7 @@ from a_config import (BUY_PRICE_BUFFER_RATE, STOP_LOSS_RATE,
 	MORNING_CHECK_TIME,AFTERNOON_CHECK_TIME,BUY_CHECK_TIME)
 from b_auth import get_token
 from c0_buy_selector import get_buy_code
-from d2_account import get_account_summary
+from d_account import get_account_summary
 from e_state import load_state, save_state, clear_state
 from f_order import (get_upper_price, buy, should_force_sell,
 	take_profit_nxt, take_profit_krx, cancel_take_profit, market_sell)

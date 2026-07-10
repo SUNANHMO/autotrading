@@ -1,4 +1,4 @@
-from d2_account import get_account_summary
+from d_account import get_account_summary
 from e_state import load_state
 from telegram import log
 
