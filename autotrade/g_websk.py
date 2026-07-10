@@ -42,7 +42,7 @@ class WebSocketClient:
 		await self.websocket.send(message)
 	async def receive(self):
 		try:
-			while self.connected:
+			while True:
 				response = json.loads(await self.websocket.recv())
 
 				if response.get("trnm") == "LOGIN":
@@ -50,20 +50,25 @@ class WebSocketClient:
 						self.connected = True
 						log("웹소켓 로그인 성공")
 					else:
-						print(response.get("return_msg"))
+						log(response.get("return_msg"))
 						await self.disconnect()
+						return
+
 				elif response.get("trnm") == "PING":
 					self.last_alive = time.time()
 					await self.send(response)
+
 				elif response.get("trnm") == "REAL":
 					self.last_alive = time.time()
 					self.handle_real(response)
+
 		except websockets.ConnectionClosed:
-			print("웹소켓 연결 종료")
-			await self.disconnect()
+			log("웹소켓 연결 종료")
+			self.connected = False
+
 		except Exception as e:
-			print(f"웹소켓 오류: {e}")
-			await self.disconnect()
+			log(f"웹소켓 오류: {e}")
+			self.connected = False
 	async def run(self):
 		await self.connect()
 		await self.receive()
