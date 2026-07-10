@@ -1,7 +1,7 @@
 import requests
 import math
 from datetime import datetime
-from telegram import log
+from telegram_log import log
 
 from a_config import BUY_RATIO, TAKE_PROFIT_RATE, WS_URL, REST_HOST, STOP_LOSS_RATE
 from c2_program import get_day_data

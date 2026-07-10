@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime
-from telegram import log
+from telegram_log import log
 
 from a_config import TEST_DATE
 from c1_search import search_pgm

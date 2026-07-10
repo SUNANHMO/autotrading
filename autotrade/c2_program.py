@@ -1,6 +1,6 @@
 import requests
 import time
-from telegram import log
+from telegram_log import log
 
 from e_state import load_state, save_state, clear_state
 from a_config import WS_URL, REST_HOST

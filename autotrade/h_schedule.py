@@ -1,7 +1,7 @@
 import asyncio
 import time
 from datetime import datetime, date
-from telegram import log
+from telegram_log import log
 
 from a_config import (BUY_PRICE_BUFFER_RATE, STOP_LOSS_RATE,
 	TOKEN_TIME,	NXT_TAKE_PROFIT_TIME,KRX_TAKE_PROFIT_TIME,

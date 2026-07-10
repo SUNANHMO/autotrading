@@ -1,6 +1,6 @@
 from d_account import get_account_summary
 from e_state import load_state
-from telegram import log
+from telegram_log import log
 
 async def process_check(token, websocket, check_type):
 	ok = True

@@ -3,7 +3,7 @@ import requests
 
 from a_config import APP_KEY, SECRET_KEY
 from a_config import REST_HOST
-from telegram import log
+from telegram_log import log
 
 def get_token():
 	endpoint = "/oauth2/token"

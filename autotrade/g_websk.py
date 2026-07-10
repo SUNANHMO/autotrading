@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 import websockets
-from telegram import log
+from telegram_log import log
 
 from datetime import datetime
 from e_state import load_state, save_state, clear_state
