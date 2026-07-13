@@ -189,16 +189,16 @@ class WebSocketClient:
 				elif (
 					order_no == state["sell_order_no"]
 					and status == "체결"):
-
-					state["holding"] = False
-					state["qty"] = 0
-					state["sell_order_no"] = None
-					state["take_profit_order_no"] = None
-					state["profit_market"] = None
-
-					save_state(state)
-
-					log(f"매도 체결 완료 : {fill_price}원 / {fill_qty}주")
+					remain_qty = int(values.get("902") or 0)
+					if remain_qty == 0:
+						avg_price = int(values.get("914") or 0)
+						state["holding"] = False
+						state["qty"] = 0
+						state["sell_order_no"] = None
+						state["take_profit_order_no"] = None
+						state["profit_market"] = None
+						save_state(state)
+						log(f"매도 체결 완료 (평균 {avg_price}원)")
 
 	async def search_condition(self):
 		if not self.connected:
