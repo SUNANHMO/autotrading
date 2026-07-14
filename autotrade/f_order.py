@@ -203,6 +203,12 @@ def should_force_sell(token):
 	high_price = int(day_data[0]["high_pric"])
 	low_price = int(day_data[0]["low_pric"])
 	buy_price = state["buy_price"]
+	
+	print(f"buy_price={buy_price}")
+	print(f"high_price={high_price}")
+	print(f"low_price={low_price}")
+	print(f"take_profit_price={buy_price * (1 + TAKE_PROFIT_RATE)}")
+	print(f"stop_loss_price={buy_price * (1 - STOP_LOSS_RATE)}")
 	# 오늘 익절가를 찍었는데 아직 보유
 	if high_price >= buy_price * (1 + TAKE_PROFIT_RATE):
 		return True
