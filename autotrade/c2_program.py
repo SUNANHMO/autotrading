@@ -408,7 +408,7 @@ def get_account_info(token, date=None):
 	params = {"qry_tp": "1","dmst_stex_tp": "KRX"}
 	result, _, _ = fn_kt00004(token=token,data=params)
 	#print("계좌조회 응답:")
-	#print(result)
+	print(result)
 	if result.get("return_code", 0) != 0:
 		return None
 	return result
