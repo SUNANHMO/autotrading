@@ -74,12 +74,18 @@ async def main():
 				else:
 					await process_check(token, websocket, "morning")
 
-			# 07:00:00 토큰발급, 계좌확인
-			if (TOKEN_TIME <= current < NXT_TAKE_PROFIT_TIME and not executed[TOKEN_TIME]):
-				executed[TOKEN_TIME] = True
-				if token is None:
-					token = get_token()
-				print("[07:00] Starting Trading Preparation")
+			# 07:00:00 토큰 확인, 계좌조회
+			if (TOKEN_TIME <= current < NXT_TAKE_PROFIT_TIME 
+			    and not executed[TOKEN_TIME]):
+			
+			    if token is None:
+			        token = get_token()
+			
+			    if token:
+			        executed[TOKEN_TIME] = True
+			
+			        print("[07:00] Starting Trading Preparation")
+
 
 				summary = get_account_summary(token)
 				state = load_state()
