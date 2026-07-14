@@ -86,7 +86,6 @@ async def main():
 			
 					print("[07:00] Starting Trading Preparation")
 
-
 				summary = get_account_summary(token)
 				state = load_state()
 
@@ -185,7 +184,11 @@ async def main():
 
 				log("PGM")
 
-				if not websocket.connected:
+				if websocket is None:
+					websocket = WebSocketClient(token)
+					asyncio.create_task(websocket.run())
+
+				elif not websocket.connected:
 					await websocket.reconnect()
 
 				codes = await websocket.search_condition()
