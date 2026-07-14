@@ -75,8 +75,7 @@ async def main():
 					await process_check(token, websocket, "morning")
 
 			# 07:00:00 토큰 확인, 계좌조회
-			if (TOKEN_TIME <= current < NXT_TAKE_PROFIT_TIME 
-				and not executed[TOKEN_TIME]):
+			if (TOKEN_TIME <= current and not executed[TOKEN_TIME]):
 			
 				if token is None:
 					token = get_token()
