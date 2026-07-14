@@ -76,15 +76,15 @@ async def main():
 
 			# 07:00:00 토큰 확인, 계좌조회
 			if (TOKEN_TIME <= current < NXT_TAKE_PROFIT_TIME 
-			    and not executed[TOKEN_TIME]):
+				and not executed[TOKEN_TIME]):
 			
-			    if token is None:
-			        token = get_token()
+				if token is None:
+					token = get_token()
 			
-			    if token:
-			        executed[TOKEN_TIME] = True
+				if token:
+					executed[TOKEN_TIME] = True
 			
-			        print("[07:00] Starting Trading Preparation")
+					print("[07:00] Starting Trading Preparation")
 
 
 				summary = get_account_summary(token)
