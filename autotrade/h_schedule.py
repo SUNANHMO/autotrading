@@ -149,10 +149,24 @@ async def main():
 			# 09:00:00 감시 시작
 			if (MONITOR_START_TIME <= current < SEARCH_TIME and not executed[MONITOR_START_TIME]):
 				executed[MONITOR_START_TIME] = True
-				print("[09:00] Starting Real-time Monitoring")  # [09:00] 실시간 감시 시작
+				if websocket is None:
+					websocket = WebSocketClient(token)
+					asyncio.create_task(websocket.run())
+					# 로그인 완료 대기
+					for _ in range(100):
+						if websocket.connected:
+							break
+						await asyncio.sleep(0.1)
+					if not websocket.connected:
+						log("★WEBSK")
+						continue
+					await websocket.register_order()
+				elif not websocket.connected:
+					await websocket.reconnect()
+				print("[09:00] Starting Real-time Monitoring")
 				state = load_state()
 				if state["holding"]:
-					await websocket.register_price(state["code"])   # 보유종목 현재가 수신
+					await websocket.register_price(state["code"])
 					log(f"TR_{state['code']}")
 				else:
 					log("No_H")
