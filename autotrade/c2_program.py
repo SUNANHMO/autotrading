@@ -98,7 +98,7 @@ def fn_ka90013(token, data, cont_yn='N', next_key=''):
 
 #Program data
 def get_program_data(token, code, days, date):
-	time.sleep(0.3)
+	time.sleep(1.1)
 
 	params = {
 		'amt_qty_tp': '1',
