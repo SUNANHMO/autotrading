@@ -19,6 +19,29 @@ from g_websk import WebSocketClient
 from i_healthcheck import process_check
 last_date = date.today()
 
+async def ensure_websocket(token, websocket):
+    if not token:
+        return None
+	
+    if websocket is None:
+        websocket = WebSocketClient(token)
+        asyncio.create_task(websocket.run())
+
+        for _ in range(100):
+            if websocket.connected:
+                break
+            await asyncio.sleep(0.1)
+
+        if not websocket.connected:
+            return None
+
+        await websocket.register_order()
+
+    elif not websocket.connected:
+        await websocket.reconnect()
+
+    return websocket
+
 async def main():
 	global last_date
 	token = None
@@ -61,22 +84,11 @@ async def main():
 			if (MORNING_CHECK_TIME <= current < TOKEN_TIME and not executed[MORNING_CHECK_TIME]):
 				executed[MORNING_CHECK_TIME] = True
 				token = get_token()
-				websocket = WebSocketClient(token)
-				asyncio.create_task(websocket.run())
-
-				# 최대 10초 대기
-				for _ in range(100):
-					if websocket.connected:
-						break
-					await asyncio.sleep(0.1)
-
-				if not websocket.connected:
-					log("★WEBSK")  # WebSocket 연결 실패 (06:55)
-				else:
-					# 주문체결 실시간은 하루 시작할 때 미리 등록
-					await websocket.register_order()
-
-					await process_check(token, websocket, "morning")
+				websocket = await ensure_websocket(token, websocket)
+				if websocket is None:
+					log("★WEBSK")
+					continue
+				await process_check(token, websocket, "morning")
 
 			# 07:00:00 토큰 확인, 계좌조회
 			if (TOKEN_TIME <= current < NXT_TAKE_PROFIT_TIME and not executed[TOKEN_TIME]):
@@ -149,20 +161,10 @@ async def main():
 			# 09:00:00 감시 시작
 			if (MONITOR_START_TIME <= current < SEARCH_TIME and not executed[MONITOR_START_TIME]):
 				executed[MONITOR_START_TIME] = True
+				websocket = await ensure_websocket(token, websocket)
 				if websocket is None:
-					websocket = WebSocketClient(token)
-					asyncio.create_task(websocket.run())
-					# 로그인 완료 대기
-					for _ in range(100):
-						if websocket.connected:
-							break
-						await asyncio.sleep(0.1)
-					if not websocket.connected:
-						log("★WEBSK")
-						continue
-					await websocket.register_order()
-				elif not websocket.connected:
-					await websocket.reconnect()
+					log("★WEBSK")
+					continue
 				print("[09:00] Starting Real-time Monitoring")
 				state = load_state()
 				if state["holding"]:
@@ -202,12 +204,10 @@ async def main():
 
 				log("PGM")
 
+				websocket = await ensure_websocket(token, websocket)
 				if websocket is None:
-					websocket = WebSocketClient(token)
-					asyncio.create_task(websocket.run())
-
-				elif not websocket.connected:
-					await websocket.reconnect()
+					log("★WEBSK")
+					continue
 
 				codes = await websocket.search_condition()
 				buy_code = get_buy_code(token, codes)
@@ -232,6 +232,10 @@ async def main():
 			# 15:29:59 매수
 			if (BUY_TIME <= current < CANCEL_TAKE_PROFIT_TIME and not executed[BUY_TIME]):
 				executed[BUY_TIME] = True
+				websocket = await ensure_websocket(token, websocket)
+				if websocket is None:
+					log("★WEBSK")
+					continue
 				state = load_state()
 				# 이미 보유중이면 매수 금지
 				if state["holding"]:
