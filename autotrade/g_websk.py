@@ -1,237 +1,297 @@
 import asyncio
-import json
 import time
-import websockets
+from datetime import datetime, date
 from telegram_log import log
 
-from datetime import datetime
+from a_config import (BUY_PRICE_BUFFER_RATE, STOP_LOSS_RATE,
+	TOKEN_TIME,	NXT_TAKE_PROFIT_TIME,KRX_TAKE_PROFIT_TIME,
+	MONITOR_START_TIME,	FORCE_SELL_TIME, MONITOR_END_TIME,
+	SEARCH_TIME, BUY_TIME, CANCEL_TAKE_PROFIT_TIME,
+	MORNING_CHECK_TIME,AFTERNOON_CHECK_TIME,BUY_CHECK_TIME)
 from b_auth import get_token
+from c0_buy_selector import get_buy_code
+from c2_program import is_trading_day
+from d_account import get_account_summary
 from e_state import load_state, save_state, clear_state, get_force_sell_date
-from a_config import WS_URL, STOP_LOSS_RATE
+from f_order import (get_upper_price, buy, should_force_sell,
+	take_profit_nxt, take_profit_krx, cancel_take_profit, market_sell)
+from g_websk import WebSocketClient
+from i_healthcheck import process_check
+last_date = date.today()
 
-class WebSocketClient:
-	def __init__(self, token):
-		self.last_alive = time.time()
-		self.uri = WS_URL
-		self.token = token
-		self.websocket = None
-		self.connected = False	
-		self.price_data = {
-			"current_price": 0,	  # 0B에서 수신
-			"expected_price": 0}  # 0H에서 수신
-		self.order_data = {
-			"order_no": None,	 # 9203 주문체결 정보
-			"status": None,		 # 913
-			"remain_qty": 0,	 # 902
-			"fill_time": None,	 # 908
-			"fill_no": None,	 # 909
-			"fill_price": 0,	 # 910
-			"fill_qty": 0}		 # 911
-		self.current_code = None
-		self.search_result = None
-		self.stop_loss_triggered = False
-	async def connect(self):
-		try:
-			self.websocket = await websockets.connect(self.uri)
-			# 아직 LOGIN 성공 전이므로 False 유지
-			self.connected = False
-			await self.send({"trnm": "LOGIN", "token": self.token})
-		except Exception as e:
-			log("★WEBSK") #웹소켓 연결 실패
-			print(e)
-			self.connected = False
-	async def send(self, message):
-		if not isinstance(message, str):
-			message = json.dumps(message)
-
-		#print("SEND :", message)
-		await self.websocket.send(message)
-	async def receive(self):
-		try:
-			while True:
-				response = json.loads(await self.websocket.recv())
-				#print(response)
-
-				if response.get("trnm") == "LOGIN":
-					if response.get("return_code") == 0:
-						self.connected = True
-						print("WEBSK") #웹소켓 로그인 성공
-					else:
-						if response.get("return_code") == 8005:
-							print("Token expired -> Issuing new token")  # 토큰 만료 → 새 토큰 발급
-							self.token = get_token()
-						else:
-							log("★WEBSK")
-							print(response)
-
-						await self.disconnect()
-						return
-
-				elif response.get("trnm") == "PING":
-					self.last_alive = time.time()
-					await self.send(response)
-
-				elif response.get("trnm") == "REAL":
-					#print("수신:", response.get("trnm"))
-					self.last_alive = time.time()
-					self.handle_real(response)					
-
-				elif response.get("trnm") == "CNSRLST":
-
-					if response.get("return_code") != 0:
-						log("★PGM") #조건검색 목록 조회 실패
-						self.search_result = []
-						continue
-
-					await self.send({
-						"trnm": "CNSRREQ",
-						"seq": "0",
-						"search_type": "0",
-						"stex_tp": "K",
-						"cont_yn": "N",
-						"next_key": ""})
-					
-				elif response.get("trnm") == "CNSRREQ":
-					data = response.get("data")
-					if not data:
-						self.search_result = []
-						continue
-					codes = []
-					for item in data:
-						codes.append(item["9001"].replace("A", ""))
-					self.search_result = codes					
-				elif response.get("trnm") == "REG":
-					print("REG:", response)
-
-		except websockets.ConnectionClosed:
-			print("WebSocket connection closed")  # 웹소켓 연결 종료
-			self.connected = False
-
-		except Exception as e:
-			print(f"WebSocket error: {e}")  # 웹소켓 오류
-			self.connected = False
-	async def run(self):
-		while True:
-			try:
-				await self.connect()
-				await self.receive()
-			except Exception as e:
-				print(f"Run loop error: {e}")  # run 오류
-
-			self.connected = False
-			await asyncio.sleep(5)
-	async def disconnect(self):
-		self.connected = False
-
-		if self.websocket:
-			await self.websocket.close()
-			self.websocket = None
-	async def register_price(self, code):
-		code = code.replace("A", "")
-		#print(code)
-		self.current_code = code
-		await self.send({
-			"trnm":"REG",
-			"grp_no":"1",
-			"refresh":"1",
-			"data":[{
-				"item":[code],
-				"type":["0B","0H"]}]})
+async def ensure_websocket(token, websocket):
+    if not token:
+        return None
 	
-	async def unregister_price(self, code):
-		code = code.replace("A", "")
-		await self.send({
-			"trnm": "UNREG",
-			"grp_no": "1",
-			"data": [{
-				"item": [code],
-				"type": ["0B", "0H"]}]})
-	
-	async def register_order(self):
-		await self.send({
-			"trnm": "REG",
-			"grp_no": "2",
-			"refresh": "1",
-			"data": [{
-				"item": [""],
-				"type": ["00"]}]})		# 주문체결
-	async def reconnect(self):
-		print("WEBSK reconnect start") #웹소켓 재연결 시작
-		self.search_result = None 
-		await self.disconnect()
-		while True:
-			try:
-				await self.disconnect()
-				await self.connect()
-				asyncio.create_task(self.receive())
-				break
-			except Exception as e:
-				print(f"Reconnection failed: {e}")  # 재연결 실패
-				await asyncio.sleep(5)
-		await self.register_order()
-		if self.current_code:
-			await self.register_price(self.current_code)
-		print("WebSocket reconnection completed")  # 웹소켓 재연결 완료
-	def handle_real(self, response):
-		for item in response.get("data", []):
-			real_type = item.get("type")
-			values = item.get("values", {})
+    if websocket is None:
+        websocket = WebSocketClient(token)
+        asyncio.create_task(websocket.run())
 
-			if real_type == "0B":
-				state = load_state()
+        for _ in range(100):
+            if websocket.connected:
+                break
+            await asyncio.sleep(0.1)
 
-				if not state["holding"]:
+        if not websocket.connected:
+            return None
+
+        await websocket.register_order()
+
+    elif not websocket.connected:
+        await websocket.reconnect()
+
+    return websocket
+
+async def main():
+	global last_date
+	token = None
+	websocket = None
+	# 하루에 한 번만 실행할 작업 체크용
+	executed = {
+		TOKEN_TIME: False,
+		NXT_TAKE_PROFIT_TIME: False,
+		KRX_TAKE_PROFIT_TIME: False,
+		MONITOR_START_TIME: False,
+		FORCE_SELL_TIME: False,
+		MONITOR_END_TIME: False,
+		SEARCH_TIME: False,
+		BUY_TIME: False,
+		CANCEL_TAKE_PROFIT_TIME: False,
+		MORNING_CHECK_TIME: False,
+		AFTERNOON_CHECK_TIME: False,
+		BUY_CHECK_TIME: False}
+
+	while True:
+		try:
+			now = datetime.now()
+			# 날짜가 바뀌면 실행 여부 초기화
+			if now.date() != last_date:
+				last_date = now.date()
+				for key in executed:
+					executed[key] = False
+				log(f"DAY_{now:%m%d}") #새로운 거래일 시작
+			current = now.strftime("%H:%M:%S")
+			
+			# 이상감지
+			if (
+				websocket
+				and MONITOR_START_TIME <= current < SEARCH_TIME):
+				if time.time() - websocket.last_alive > 30:
+					log("★WEBSK")
+					await websocket.reconnect()
+
+			# 06:55 시스템 점검
+			if (MORNING_CHECK_TIME <= current < TOKEN_TIME and not executed[MORNING_CHECK_TIME]):
+				executed[MORNING_CHECK_TIME] = True
+				token = get_token()
+				websocket = await ensure_websocket(token, websocket)
+				if websocket is None:
+					log("★WEBSK")
 					continue
-				self.price_data["current_price"] = abs(int(values.get("10") or 0))
-				stop_price = int(state["buy_price"] * (1 - abs(STOP_LOSS_RATE)))
-				if (
-					self.price_data["current_price"] <= stop_price
-					and not self.stop_loss_triggered):
-					self.stop_loss_triggered = True
+				await process_check(token, websocket, "morning")
 
-			elif real_type == "0H":
-				self.price_data["expected_price"] = abs(int(values.get("10") or 0))
+			# 07:00:00 토큰 확인, 계좌조회
+			if (TOKEN_TIME <= current < NXT_TAKE_PROFIT_TIME and not executed[TOKEN_TIME]):
+			
+				if token is None:
+					token = get_token()
 
-			elif real_type == "00":
-				print("ORDER REAL:", values)
-				order_no = values.get("9203")
-				status = values.get("913")
-				fill_price = abs(int(values.get("910") or 0))
-				fill_qty = int(values.get("911") or 0)
-				#print("주문체결 REAL 수신:", values)
+				if not token:
+					await asyncio.sleep(5)
+					continue
+
+				executed[TOKEN_TIME] = True
+				print("[07:00] Starting Trading Preparation")
+
+				summary = get_account_summary(token)
 				state = load_state()
 
-				if (
-					order_no == state["buy_order_no"]
-					and status == "체결"):
-					state["holding"] = True
-					state["qty"] = fill_qty
-					state["buy_price"] = fill_price
-					buy_date = datetime.today()
-					state["buy_date"] = buy_date.strftime("%Y%m%d")
-					force_sell_date = get_force_sell_date(buy_date)
-					state["force_sell_date"] = force_sell_date.strftime("%Y%m%d")
-					state["buy_order_no"] = None
-					save_state(state)
-					log("B") #매수 체결 완료
-				
-				elif (
-					order_no == state["sell_order_no"]
-					and status == "체결"):
-					remain_qty = int(values.get("902") or 0)
-					if remain_qty == 0:
-						self.stop_loss_triggered = False
-						avg_price = int(values.get("914") or 0)
-						clear_state()
-						log(f"S_{avg_price}")
+				if summary["has_holding"]:
+					stock = summary["holding"]
 
-	async def search_condition(self):
-		if not self.connected:
-			return []
-		self.search_result = None
-		await self.send({"trnm":"CNSRLST"})
-		for _ in range(100):
-			if self.search_result is not None:
-				return self.search_result
-			await asyncio.sleep(0.1)
-		return []
+					state["holding"] = True
+					state["code"] = stock["code"]
+					state["name"] = stock["name"]
+					state["qty"] = stock["qty"]
+					state["buy_price"] = stock["buy_price"]
+					state["sell_order_no"] = None
+
+					# 기존 state에 force_sell_date가 없을 경우 보완
+					if not state.get("force_sell_date"):
+						buy_date = datetime.today()
+						force_sell_date = get_force_sell_date(buy_date)
+						state["buy_date"] = buy_date.strftime("%Y%m%d")
+						state["force_sell_date"] = force_sell_date.strftime("%Y%m%d")
+					save_state(state)
+
+				else:
+					clear_state()
+
+				print(f"Estimated Balance: {summary['cash']}")
+				print(f"Purchase Amount: {summary['asset']}")
+				print(f"Holding Status: {summary['has_holding']}")
+				print("[07:00] Trading Preparation Completed")
+
+			# 08:00:01 NXT 익절주문
+			if (NXT_TAKE_PROFIT_TIME <= current < KRX_TAKE_PROFIT_TIME and not executed[NXT_TAKE_PROFIT_TIME]):
+				executed[NXT_TAKE_PROFIT_TIME] = True
+				state = load_state()
+				if state["holding"]:
+					print("[08:00] NXT Take-Profit Order")  # [08:00] NXT 익절주문
+					order_no = take_profit_nxt(token)
+					if order_no:
+						log("N_O")
+						print(order_no)
+					else:
+						log("N_X")
+
+			# 08:30:01 KRX 익절주문
+			if (KRX_TAKE_PROFIT_TIME <= current < MONITOR_START_TIME and not executed[KRX_TAKE_PROFIT_TIME]):
+				executed[KRX_TAKE_PROFIT_TIME] = True
+				state = load_state()
+				if state["holding"]:
+					print("[08:30] KRX Take-Profit Order")  # [08:30] KRX 익절주문
+					order_no = take_profit_krx(token)
+					if order_no:
+						log("K_O")
+						print(order_no)
+					else:
+						log("K_X")
+
+			# 09:00:00 감시 시작
+			if (MONITOR_START_TIME <= current < SEARCH_TIME and not executed[MONITOR_START_TIME]):
+				executed[MONITOR_START_TIME] = True
+				websocket = await ensure_websocket(token, websocket)
+				if websocket is None:
+					log("★WEBSK")
+					continue
+				print("[09:00] Starting Real-time Monitoring")
+				state = load_state()
+				if state["holding"]:
+					await websocket.register_price(state["code"])
+					log(f"TR_{state['code']}")
+				else:
+					log("No_H")
+
+			# 15:15 시스템 점검
+			if (AFTERNOON_CHECK_TIME <= current < FORCE_SELL_TIME and not executed[AFTERNOON_CHECK_TIME]):
+				executed[AFTERNOON_CHECK_TIME] = True
+				await process_check(token, websocket, "afternoon")
+
+			# 15:19:00
+			if (FORCE_SELL_TIME <= current < SEARCH_TIME and not executed[FORCE_SELL_TIME]):
+				executed[FORCE_SELL_TIME] = True
+				state = load_state()
+				if state["holding"] and should_force_sell(token):
+					log("FORCE")  # 비정상 보유 → 강제청산
+					print("Calling market_sell function")  # 시장가매도 함수 호출
+					order_no = market_sell(token)
+					print(f"market_sell Return Value: {order_no}")  # market_sell 반환값 :
+					if order_no:
+						print("Force Liquidation Order Placed")  # 강제청산 주문
+						
+			# 15:20:05 검색
+			if (SEARCH_TIME <= current < BUY_TIME and not executed[SEARCH_TIME]):
+				executed[SEARCH_TIME] = True
+				summary = get_account_summary(token)
+				holding = summary["has_holding"]
+
+				if not holding:
+					clear_state()
+					print("No Holding - State Cleared")
+				else:
+					print("Holding exists - Keep State")
+
+				log("PGM")
+
+				websocket = await ensure_websocket(token, websocket)
+				if websocket is None:
+					log("★WEBSK")
+					continue
+
+				codes = await websocket.search_condition()
+				buy_code = get_buy_code(token, codes)
+
+				if buy_code is None:
+					log("No_B")
+				else:
+					if holding:
+						log(f"SKIP_{buy_code}") # 보유중이면 기록만
+					else:
+						state = load_state()
+						state["code"] = buy_code
+						save_state(state)
+						await websocket.register_price(buy_code)
+						log(f"B_{buy_code}")
+			
+			# 15:25 시스템 점검
+			if (BUY_CHECK_TIME <= current < BUY_TIME and not executed[BUY_CHECK_TIME]):
+				executed[BUY_CHECK_TIME] = True
+				await process_check(token, websocket, "buy")
+
+			# 15:29:59 매수
+			if (BUY_TIME <= current < CANCEL_TAKE_PROFIT_TIME and not executed[BUY_TIME]):
+				executed[BUY_TIME] = True
+				websocket = await ensure_websocket(token, websocket)
+				if websocket is None:
+					log("★WEBSK")
+					continue
+				state = load_state()
+				# 이미 보유중이면 매수 금지
+				if state["holding"]:
+					log("SKIP_BUY")
+				else:
+					expected_price = websocket.price_data["expected_price"]
+					if expected_price <= 0:
+						log("★E")
+					else:
+						buy_price = get_upper_price(
+							expected_price * (1 + BUY_PRICE_BUFFER_RATE))
+						order_no = buy(token, state["code"], buy_price)
+						if order_no:
+							print(f"O_{order_no}")
+						else:
+							log("★ORDER")
+
+			# 15:31:00
+			if (CANCEL_TAKE_PROFIT_TIME <= current < "20:00:00" and not executed[CANCEL_TAKE_PROFIT_TIME]):
+				executed[CANCEL_TAKE_PROFIT_TIME] = True
+				state = load_state()
+				if state.get("take_profit_order_no"):
+					order_no = cancel_take_profit(token)
+
+					if order_no:
+						print("CANCEL")
+					else:
+						log("★CANCEL")
+				# 하루 최종 계좌 상태
+				summary = get_account_summary(token)
+				if summary["cash"] is None:
+					log("★ACCOUNT")
+				else:
+					holding = "O" if summary["has_holding"] else "X"
+					log(f"A_{summary['cash']}_{holding}")
+
+			# 실시간 손절 감시 (09:00 ~ 15:20까지만)
+			if (
+				websocket
+				and MONITOR_START_TIME <= current < SEARCH_TIME
+				and websocket.stop_loss_triggered
+			):
+				websocket.stop_loss_triggered = False
+				state = load_state()
+				if state["holding"] and state["sell_order_no"] is None:
+					log("CUT") #[손절] 조건 충족
+					order_no = market_sell(token)
+					if order_no:
+						print(f"S_{order_no}") #시장가 매도 주문
+
+			await asyncio.sleep(1)
+
+		except Exception as e:
+			log("★Scheduler")
+			print(e)
+			await asyncio.sleep(5)
+
+if __name__ == "__main__":
+	asyncio.run(main())
