@@ -5,8 +5,8 @@ if IS_MOCK:
 	REST_HOST = "https://mockapi.kiwoom.com" # 모의투자
 	WS_URL = "wss://mockapi.kiwoom.com:10000/api/dostk/websocket"
 	ACCOUNT_NO = "83163660"
-	APP_KEY = "-"
-	SECRET_KEY = "-"
+	APP_KEY = "k5Az_Pee3pTKXJW0AhzOPeKAYYbVDzXyMsj0j3dnq5E"
+	SECRET_KEY = "e9p3cUHG7qPJnLur4gVVGg29ILNRKQtGVRNWnHkInaE"
 else:
 	REST_HOST = "https://api.kiwoom.com" # 실전투자
 	WS_URL = "wss://api.kiwoom.com:10000/api/dostk/websocket"
