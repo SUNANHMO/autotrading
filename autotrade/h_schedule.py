@@ -256,7 +256,7 @@ async def main():
 					print("15:25: 신규 매수분은 익일까지 보유 가능")
 
 			# 당일 매수 점검
-			if (BUY_CHECK_TIME <= current < FORCE_SELL_TIME and not executed["buy_check"]):
+			if (BUY_CHECK_TIME <= current < "08:56:00" and not executed["buy_check"]):
 				executed["buy_check"] = True
 				await process_check(token, websocket, "buy")
 			await asyncio.sleep(0.1)
