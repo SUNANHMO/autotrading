@@ -4,12 +4,12 @@ import time
 from datetime import datetime, date
 from telegram_log import log
 from a_config import (TOKEN_TIME, NXT_TAKE_PROFIT_TIME, KRX_TAKE_PROFIT_TIME, MONITOR_START_TIME,
-	FORCE_SELL_TIME, SEARCH_TIME, BUY_TIME, MORNING_CHECK_TIME, AFTERNOON_CHECK_TIME, BUY_CHECK_TIME,)
+	FORCE_SELL_TIME, SEARCH_TIME, BUY_TIME, MORNING_CHECK_TIME, AFTERNOON_CHECK_TIME, BUY_CHECK_TIME,CANCEL_TAKE_PROFIT_TIME,)
 from b_auth import get_token
 from c0_buy_selector import get_buy_code
 from d_account import get_account_summary
 from e_state import load_state, save_state, clear_state
-from f_order import (get_upper_price, buy, take_profit_nxt, take_profit_krx, market_sell,)
+from f_order import (get_upper_price, buy, take_profit_nxt, take_profit_krx, market_sell,cancel_take_profit,)
 from g_websk import WebSocketClient
 from i_healthcheck import process_check
 
@@ -86,7 +86,8 @@ async def main():
 		"buy": False,
 		"afternoon_check": False,
 		"force_sell": False,
-		"buy_check": False,}
+		"buy_check": False,
+		"cancel_tp": False,}
 
 	while True:
 		try:
@@ -261,6 +262,37 @@ async def main():
 				await process_check(token, websocket, "buy")
 			await asyncio.sleep(0.1)
 
+			# 15:31 하루 마감 처리
+			if (CANCEL_TAKE_PROFIT_TIME <= current < "15:32:00"
+					and not executed["cancel_tp"]):
+				executed["cancel_tp"] = True
+				token, websocket = await ensure_websocket(token, websocket)
+				if websocket is None:
+					log("★WEBSK_CANCEL_TAKE_PROFIT")
+				else:
+					state = load_state()
+					# 기존 보유분의 익절 주문만 취소
+					if (
+						state.get("take_profit_order_no")
+						and state.get("position_origin") == "existing"):
+						order_no = cancel_take_profit(token)
+						if order_no:
+							log("CANCEL_EXISTING_TP")
+						else:
+							log("★CANCEL_EXISTING_TP")
+					# 최종 계좌 상태 확인
+					await asyncio.sleep(2)
+					summary = get_account_summary(token)
+					if summary.get("cash") is None:
+						log("★ACCOUNT")
+					else:
+						holding = "O" if summary["has_holding"] else "X"
+						log(f"A_{summary['cash']}_{holding}")
+					# 당일 WebSocket 종료
+					await websocket.stop()
+					websocket = None
+					print("WebSocket stopped for today")
+					
 		except Exception as e:
 			log(f"★SCHEDULE_{type(e).__name__}")
 			print("Schedule error:", e)
