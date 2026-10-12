@@ -263,7 +263,7 @@ async def main():
 			await asyncio.sleep(0.1)
 
 			# 15:31 하루 마감 처리
-			if (CANCEL_TAKE_PROFIT_TIME <= current < "15:32:00"
+			if (CANCEL_TAKE_PROFIT_TIME <= current < "20:00:00"
 					and not executed["cancel_tp"]):
 				executed["cancel_tp"] = True
 				token, websocket = await ensure_websocket(token, websocket)
