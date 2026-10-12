@@ -4,13 +4,13 @@ IS_MOCK = False # 모의투자 : True / 실전투자 : False
 if IS_MOCK:
 	REST_HOST = "https://mockapi.kiwoom.com" # 모의투자
 	WS_URL = "wss://mockapi.kiwoom.com:10000/api/dostk/websocket"
-	ACCOUNT_NO = "8130274111"
-	APP_KEY = "EZt0oXFHaixfgrESIODTuiij6VMTA1z8leZFu_0bqGA"
-	SECRET_KEY = "uXj7-Di6L7iuK6Q1wDuee-bpdoAnefRUEUVzS6Jz-tA"
+	ACCOUNT_NO = "83163660"
+	APP_KEY = "-"
+	SECRET_KEY = "-"
 else:
 	REST_HOST = "https://api.kiwoom.com" # 실전투자
 	WS_URL = "wss://api.kiwoom.com:10000/api/dostk/websocket"
-	ACCOUNT_NO = "6618028811"
+	ACCOUNT_NO = "66180288"
 	APP_KEY = "PObxSf_yWNbRgWVlM7fzRkwbgE-bfjcETJyT4HYmPJ4"
 	SECRET_KEY = "490D2XhJt3_mIhX4VuXu_pZLnlhQE3Z0fWK0LzuBU-E"
 	
