@@ -1,5 +1,5 @@
 # 키움 REST API 설정
-IS_MOCK = False # 모의투자 : True / 실전투자 : False
+IS_MOCK = True # 모의투자 : True / 실전투자 : False
 
 if IS_MOCK:
 	REST_HOST = "https://mockapi.kiwoom.com" # 모의투자
