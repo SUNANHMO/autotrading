@@ -176,7 +176,7 @@ async def main():
 									state["candidate_code"] = None
 									state["candidate_name"] = None
 									save_state(state)
-									log("No_B")
+									print("No_B")
 								else:
 									state["candidate_code"] = candidate
 									state["candidate_name"] = None
