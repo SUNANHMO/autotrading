@@ -259,13 +259,13 @@ class WebSocketClient:
 				if raw_code
 				else self.current_code)
 			if real_type == "0B":
-				print(
-					f"[실시간 체결] "
-					f"code={code}, "
-					f"time={values.get('20')}, "
-					f"현재가={values.get('10')}, "
-					f"시가={values.get('16')}, "
-					f"고가={values.get('17')}")
+				#print(
+				#	f"[실시간 체결] "
+				#	f"code={code}, "
+				#	f"time={values.get('20')}, "
+				#	f"현재가={values.get('10')}, "
+				#	f"시가={values.get('16')}, "
+				#	f"고가={values.get('17')}")
 				self._handle_stock_price(code, values)
 			
 			elif real_type == "0H":
