@@ -402,8 +402,8 @@ class WebSocketClient:
 		"""
 		0B 실시간 데이터
 		FID 10: 현재가
-		FID 27: 최우선 매수호가
-		FID 28: 최우선 매도호가
+		FID 27: 최우선 매도호가
+		FID 28: 최우선 매수호가
 		"""
 
 		current_price = self._to_int(values.get("10"))
