@@ -295,8 +295,8 @@ async def monitor_etf_signal(now, last_flow_signature, token):
 				started = await asyncio.to_thread(
 					start_etf_switch,
 					token,
-					signal,)
-
+					signal,
+					websocket,)
 				if started:
 					log(f"ETF_SWITCH_SELL_STARTED_{signal}")
 				else:
@@ -345,6 +345,7 @@ async def main():
 				await asyncio.to_thread(
 					advance_etf_switch,
 					token,
+					websocket,
 				)
 			# 실시간 ETF 수급 감시 및 신호 판단
 			last_etf_flow_signature = await monitor_etf_signal(
