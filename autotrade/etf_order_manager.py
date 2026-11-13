@@ -374,3 +374,21 @@ def confirm_closing_balance_zero(balance_qty):
 	_clear_order(state)
 
 	return _save(state)
+
+def mark_switch_buy_unknown():
+	"""
+	매수 주문 접수 여부가 불명확한 경우 자동 재주문을 차단한다.
+	실제 미체결 주문 확인 후 수동으로 복구해야 한다.
+	"""
+	state = load_state()
+
+	if (
+		state.get("switching")
+		and state.get("order_type") == "SELL_DONE"
+		and not state.get("order_no")
+	):
+		state["order_type"] = "BUY_SUBMIT_UNKNOWN"
+		_save(state)
+		return True
+
+	return False
