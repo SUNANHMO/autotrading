@@ -20,24 +20,22 @@ from a_config import (
 	AFTERNOON_CHECK_TIME,
 	BUY_CHECK_TIME,
 	CANCEL_TAKE_PROFIT_TIME,
-	ETF_FLOW_MAX_AGE_SECONDS,
-)
-
+	ETF_FLOW_MAX_AGE_SECONDS,)
 from b_auth import get_token
 from c0_buy_selector import get_buy_code
 from d_account import get_account_summary
 from e_state import load_state, save_state, clear_state
-
 from f_order import (
 	get_upper_price,
 	buy,
 	take_profit_nxt,
 	take_profit_krx,
 	market_sell,
-	cancel_take_profit,
-)
-
+	cancel_take_profit,)
 from g_websk import WebSocketClient
+from etf_execution import (
+	start_etf_switch,
+	advance_etf_switch,)
 from i_healthcheck import process_check
 
 
@@ -255,10 +253,10 @@ def read_live_program_flow(now):
 		return None
 
 
-def monitor_etf_signal(now, last_flow_signature):
+async def monitor_etf_signal(now, last_flow_signature, token):
 	"""
-	실시간 수급이 새로 들어왔을 때만 ETF 전략을 실행한다.
-	이 함수는 신호 판단과 상태 갱신만 하며 주문은 내지 않는다.
+	새 실시간 수급 데이터가 들어왔을 때 ETF 신호를 판단한다.
+	전환 신호만 주문 실행 모듈로 전달한다.
 	"""
 	if not ("09:00:00" <= now.strftime("%H:%M:%S") < "15:20:00"):
 		return last_flow_signature
@@ -272,8 +270,7 @@ def monitor_etf_signal(now, last_flow_signature):
 		flow["time"],
 		flow["net_amount"],
 		flow["high_net_amount"],
-		flow["low_net_amount"],
-	)
+		flow["low_net_amount"],)
 
 	if signature == last_flow_signature:
 		return last_flow_signature
@@ -281,20 +278,32 @@ def monitor_etf_signal(now, last_flow_signature):
 	signal = check_signal(
 		flow["net_amount"],
 		flow["high_net_amount"],
-		flow["low_net_amount"],
-	)
+		flow["low_net_amount"],)
 
 	if signal:
 		log(
 			f"ETF_SIGNAL_{signal}_"
-			f"{flow['net_amount']}_{flow['time']}"
-		)
+			f"{flow['net_amount']}_{flow['time']}")
+
 		print(
-			"[ETF 신호 감지 - 주문 미실행]",
+			"[ETF 신호 감지]",
 			signal,
 			flow["net_amount"],
-			flow["time"],
-		)
+			flow["time"],)
+
+		if signal in ("SWITCH_TO_KODEX200", "SWITCH_TO_INVERSE"):
+			if not token:
+				log("★ETF_SWITCH_NO_TOKEN")
+			else:
+				started = await asyncio.to_thread(
+					start_etf_switch,
+					token,
+					signal,)
+
+				if started:
+					log(f"ETF_SWITCH_SELL_STARTED_{signal}")
+				else:
+					log(f"ETF_SWITCH_SELL_NOT_STARTED_{signal}")
 
 	return signature
 
@@ -330,10 +339,21 @@ async def main():
 		try:
 			now = datetime.now()
 			current = now.strftime("%H:%M:%S")
+			# ETF 전환 진행
+			# 15:20 이후에는 반대 ETF 신규 매수를 진행하지 않는다.
+			if (
+				token
+				and "09:00:00" <= current < "15:20:00"
+			):
+				await asyncio.to_thread(
+					advance_etf_switch,
+					token,
+				)
 			# 실시간 ETF 수급 감시 및 신호 판단
-			last_etf_flow_signature = monitor_etf_signal(
+			last_etf_flow_signature = await monitor_etf_signal(
 				now,
 				last_etf_flow_signature,
+				token,
 			)
 			if now.date() != last_date:
 				last_date = now.date()
