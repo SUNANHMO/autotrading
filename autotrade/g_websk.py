@@ -287,6 +287,13 @@ class WebSocketClient:
 			elif real_type == "00":
 				self._handle_order_event(values)
 
+			elif real_type == "0w":
+					print(
+							"[프로그램 수급 수신]",
+							f"code={code}",
+							f"time={values.get('20')}",
+							f"net_amount={values.get('212')}")
+	
 	@staticmethod
 	def _to_int(value):
 		try:
