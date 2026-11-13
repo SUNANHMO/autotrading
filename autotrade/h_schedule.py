@@ -1,4 +1,3 @@
-
 import asyncio
 import time
 import requests
@@ -33,9 +32,7 @@ from f_order import (
 	market_sell,
 	cancel_take_profit,)
 from g_websk import WebSocketClient
-from etf_execution import (
-	start_etf_switch,
-	advance_etf_switch,)
+from etf_execution import (start_etf_switch,advance_etf_switch,)
 from i_healthcheck import process_check
 
 
