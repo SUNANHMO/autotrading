@@ -5,38 +5,34 @@ from etf_state import load_state, save_state
 KODEX200 = "069500"
 INVERSE = "114800"
 
-def check_signal(net_amount):
+
+def check_signal(net_amount, daily_high=None, daily_low=None):
 	state = load_state()
 	position = state["position"]
 
-	# 주문 진행 여부와 관계없이 현재 수급값은 갱신
 	state["current_net_amount"] = net_amount
 
-	# 보유 방향의 당일 고점·저점은 계속 추적
 	if position == "INVERSE":
-		if net_amount < state["low_net_amount"]:
-			state["low_net_amount"] = net_amount
+		observed_low = net_amount if daily_low is None else daily_low
+		state["low_net_amount"] = min(
+			state["low_net_amount"], observed_low
+		)
 
 	elif position == "KODEX200":
-		if net_amount > state["high_net_amount"]:
-			state["high_net_amount"] = net_amount
+		observed_high = net_amount if daily_high is None else daily_high
+		state["high_net_amount"] = max(
+			state["high_net_amount"], observed_high
+		)
 
-	# 주문 진행 중이거나 전환 중이면 신규 신호만 보류
-	if (
-		state["order_no"]
-		or state["switching"]
-		or state["closing_started"]
-	):
+	if state["order_no"] or state["switching"] or state["closing_started"]:
 		save_state(state)
 		return None
 
 	if position == "NONE":
 		if net_amount >= REVERSE_AMOUNT:
 			signal = "BUY_KODEX200"
-
 		elif net_amount <= -REVERSE_AMOUNT:
 			signal = "BUY_INVERSE"
-
 		else:
 			signal = None
 
@@ -47,23 +43,20 @@ def check_signal(net_amount):
 		return signal
 
 	if position == "INVERSE":
-		if net_amount >= (
-			state["low_net_amount"] + REVERSE_AMOUNT
-		):
+		if net_amount >= state["low_net_amount"] + REVERSE_AMOUNT:
 			print("[ETF 전환 신호] INVERSE → KODEX200")
 			save_state(state)
 			return "SWITCH_TO_KODEX200"
 
 	elif position == "KODEX200":
-		if net_amount <= (
-			state["high_net_amount"] - REVERSE_AMOUNT
-		):
+		if net_amount <= state["high_net_amount"] - REVERSE_AMOUNT:
 			print("[ETF 전환 신호] KODEX200 → INVERSE")
 			save_state(state)
 			return "SWITCH_TO_INVERSE"
 
 	save_state(state)
 	return None
+
 
 def confirm_position(position, net_amount, qty):
 	"""
