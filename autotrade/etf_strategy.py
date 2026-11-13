@@ -6,25 +6,49 @@ KODEX200 = "069500"
 INVERSE = "114800"
 
 
-def check_signal(net_amount, daily_high=None, daily_low=None):
+def check_signal(
+	net_amount,
+	daily_high=None,
+	daily_low=None,
+):
 	state = load_state()
 	position = state["position"]
 
+	net_amount = int(net_amount)
+
 	state["current_net_amount"] = net_amount
 
+	# 당일 실시간 최고·최저 수급을 반영한다.
 	if position == "INVERSE":
-		observed_low = net_amount if daily_low is None else daily_low
+		if daily_low is not None:
+			state["low_net_amount"] = min(
+				int(state.get("low_net_amount") or daily_low),
+				int(daily_low),
+			)
+
 		state["low_net_amount"] = min(
-			state["low_net_amount"], observed_low
+			int(state.get("low_net_amount") or net_amount),
+			net_amount,
 		)
 
 	elif position == "KODEX200":
-		observed_high = net_amount if daily_high is None else daily_high
+		if daily_high is not None:
+			state["high_net_amount"] = max(
+				int(state.get("high_net_amount") or daily_high),
+				int(daily_high),
+			)
+
 		state["high_net_amount"] = max(
-			state["high_net_amount"], observed_high
+			int(state.get("high_net_amount") or net_amount),
+			net_amount,
 		)
 
-	if state["order_no"] or state["switching"] or state["closing_started"]:
+	# 미체결 주문이나 전환·마감 진행 중에는 신호만 갱신하지 않는다.
+	if (
+		state.get("order_no")
+		or state.get("switching")
+		or state.get("closing_started")
+	):
 		save_state(state)
 		return None
 
@@ -43,20 +67,23 @@ def check_signal(net_amount, daily_high=None, daily_low=None):
 		return signal
 
 	if position == "INVERSE":
-		if net_amount >= state["low_net_amount"] + REVERSE_AMOUNT:
+		if net_amount >= (
+			state["low_net_amount"] + REVERSE_AMOUNT
+		):
 			print("[ETF 전환 신호] INVERSE → KODEX200")
 			save_state(state)
 			return "SWITCH_TO_KODEX200"
 
 	elif position == "KODEX200":
-		if net_amount <= state["high_net_amount"] - REVERSE_AMOUNT:
+		if net_amount <= (
+			state["high_net_amount"] - REVERSE_AMOUNT
+		):
 			print("[ETF 전환 신호] KODEX200 → INVERSE")
 			save_state(state)
 			return "SWITCH_TO_INVERSE"
 
 	save_state(state)
 	return None
-
 
 def confirm_position(position, net_amount, qty):
 	"""
