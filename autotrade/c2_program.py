@@ -604,23 +604,23 @@ def find_take_profit_order(token, code):
 	return None, None
 
 def get_etf_unfilled_orders(token):
-		# ETF 두 종목의 전체 미체결 매수/매도 주문 조회
-		etf_codes = ("069500", "114800")
-		params = {"all_stk_tp": "0", "trde_tp": "0", "stex_tp": "0"}
-		all_orders = []
-		cont_yn = "N"
-		next_key = ""
-		while True:
-				result, response_cont, response_key = fn_ka10075(token, params, cont_yn, next_key)
-				if result.get("return_code", 0) != 0:
-						print("[ETF 미체결 조회 오류]", result)
-						return None
-				for item in result.get("oso", []):
-						code = item.get("stk_cd", "").replace("A", "")
-						if code in etf_codes and int(item.get("oso_qty", 0)) > 0:
-								all_orders.append(item)
-				if response_cont != "Y" or not response_key:
-						break
-				cont_yn = "Y"
-				next_key = response_key
-		return all_orders
+	# ETF 두 종목의 전체 미체결 매수/매도 주문 조회
+	etf_codes = ("069500", "114800")
+	params = {"all_stk_tp": "0", "trde_tp": "0", "stex_tp": "0"}
+	all_orders = []
+	cont_yn = "N"
+	next_key = ""
+	while True:
+			result, response_cont, response_key = fn_ka10075(token, params, cont_yn, next_key)
+			if result.get("return_code", 0) != 0:
+					print("[ETF 미체결 조회 오류]", result)
+					return None
+			for item in result.get("oso", []):
+					code = item.get("stk_cd", "").replace("A", "")
+					if code in etf_codes and int(item.get("oso_qty", 0)) > 0:
+							all_orders.append(item)
+			if response_cont != "Y" or not response_key:
+					break
+			cont_yn = "Y"
+			next_key = response_key
+	return all_orders
