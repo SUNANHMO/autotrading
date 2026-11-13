@@ -250,7 +250,7 @@ def read_live_program_flow(now):
 		return None
 
 
-async def monitor_etf_signal(now, last_flow_signature, token):
+async def monitor_etf_signal(now, last_flow_signature, token, websocket):
 	"""
 	새 실시간 수급 데이터가 들어왔을 때 ETF 신호를 판단한다.
 	전환 신호만 주문 실행 모듈로 전달한다.
@@ -352,6 +352,7 @@ async def main():
 				now,
 				last_etf_flow_signature,
 				token,
+				websocket,
 			)
 			if now.date() != last_date:
 				last_date = now.date()
