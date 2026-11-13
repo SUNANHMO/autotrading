@@ -6,63 +6,59 @@ KODEX200 = "069500"
 INVERSE = "114800"
 
 def check_signal(net_amount):
-	"""
-	삼성전자 프로그램 순매수 금액으로 ETF 전환 신호 판단
-	net_amount 단위: 백만 원
-	최초:
-		+20,000 도달 -> KODEX200 매수
-		-20,000 도달 -> 인버스 매수
-	인버스 보유:
-		최저점에서 20,000 상승 -> KODEX200 전환
-	KODEX200 보유:
-		최고점에서 20,000 하락 -> 인버스 전환
-	"""
 	state = load_state()
 	position = state["position"]
-    
-    # 주문 또는 ETF 전환이 진행 중이면 새 신호를 무시
-	if state["order_no"] or state["switching"]:
-		return None
-	
-    # 현재 수급값 저장
+
+	# 주문 진행 여부와 관계없이 현재 수급값은 갱신
 	state["current_net_amount"] = net_amount
 
-	# 최초 진입
+	# 보유 방향의 당일 고점·저점은 계속 추적
+	if position == "INVERSE":
+		if net_amount < state["low_net_amount"]:
+			state["low_net_amount"] = net_amount
+
+	elif position == "KODEX200":
+		if net_amount > state["high_net_amount"]:
+			state["high_net_amount"] = net_amount
+
+	# 주문 진행 중이거나 전환 중이면 신규 신호만 보류
+	if (
+		state["order_no"]
+		or state["switching"]
+		or state["closing_started"]
+	):
+		save_state(state)
+		return None
+
 	if position == "NONE":
 		if net_amount >= REVERSE_AMOUNT:
 			signal = "BUY_KODEX200"
+
 		elif net_amount <= -REVERSE_AMOUNT:
 			signal = "BUY_INVERSE"
+
 		else:
 			signal = None
+
 		if signal:
-			print(f"[ETF 신호] 최초 진입: {signal}, 수급={net_amount}")
+			print("[ETF 신호]", signal, net_amount)
+
 		save_state(state)
 		return signal
 
-	# 인버스 보유 중
 	if position == "INVERSE":
-		# 최저점 갱신
-		if net_amount < state["low_net_amount"]:
-			state["low_net_amount"] = net_amount
-		# 최저점에서 200억 상승
-		if net_amount >= state["low_net_amount"] + REVERSE_AMOUNT:
-			print(
-				f"[ETF 신호] 인버스 -> KODEX200 "
-				f"최저점={state['low_net_amount']}, 현재={net_amount}")
+		if net_amount >= (
+			state["low_net_amount"] + REVERSE_AMOUNT
+		):
+			print("[ETF 전환 신호] INVERSE → KODEX200")
 			save_state(state)
 			return "SWITCH_TO_KODEX200"
 
-	# KODEX200 보유 중
 	elif position == "KODEX200":
-		# 최고점 갱신
-		if net_amount > state["high_net_amount"]:
-			state["high_net_amount"] = net_amount
-		# 최고점에서 200억 하락
-		if net_amount <= state["high_net_amount"] - REVERSE_AMOUNT:
-			print(
-				f"[ETF 신호] KODEX200 -> 인버스 "
-				f"최고점={state['high_net_amount']}, 현재={net_amount}")
+		if net_amount <= (
+			state["high_net_amount"] - REVERSE_AMOUNT
+		):
+			print("[ETF 전환 신호] KODEX200 → INVERSE")
 			save_state(state)
 			return "SWITCH_TO_INVERSE"
 
