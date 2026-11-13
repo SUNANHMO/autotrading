@@ -663,3 +663,49 @@ def etf_market_sell(token, code, qty):
 	)
 
 	return order_no
+
+# ------------------------------------------
+# ETF 미체결 주문 전량 취소
+# ------------------------------------------
+
+def etf_cancel_order(token, code, order_no):
+	"""
+	ETF 원주문의 미체결 잔량 전체 취소 요청.
+	실제 취소 완료가 아닌 취소 요청 접수만 확인한다.
+	"""
+
+	if not token or not code or not order_no:
+		log("★ETF_CANCEL_INVALID")
+		return None
+
+	data = {
+		"dmst_stex_tp": "KRX",
+		"orig_ord_no": str(order_no),
+		"stk_cd": str(code).replace("A", ""),
+		"cncl_qty": "0",
+	}
+
+	try:
+		result = fn_kt10003(token, data)
+
+		if not isinstance(result, dict):
+			log("★ETF_CANCEL_RESPONSE")
+			return None
+
+		if result.get("return_code") not in (0, "0"):
+			log(f"★ETF_CANCEL_REQUEST_{result.get('return_code')}")
+			print("ETF 취소 요청 실패:", result)
+			return None
+
+		log(f"ETF_CANCEL_REQUESTED_{order_no}")
+		print(
+			f"[ETF 취소 요청 접수] "
+			f"code={code}, order_no={order_no}"
+		)
+
+		return result
+
+	except Exception as e:
+		log(f"★ETF_CANCEL_{type(e).__name__}")
+		print("ETF 취소 요청 오류:", e)
+		return None
