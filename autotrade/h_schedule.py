@@ -206,67 +206,67 @@ def check_program_history(token, stock_code="005930"):
 	return all_rows
 
 def read_live_program_flow(now):
-    """
-    실시간 삼성전자 프로그램 매매 수급을 읽는다.
-    오늘 날짜의 최신 데이터이며 30초 이내인 경우에만 반환한다.
-    """
-    try:
-        with open(
-            "program_flow_live.json",
-            "r",
-            encoding="utf-8",
-        ) as f:
-            data = json.load(f)
+	"""
+	실시간 삼성전자 프로그램 매매 수급을 읽는다.
+	오늘 날짜의 최신 데이터이며 30초 이내인 경우에만 반환한다.
+	"""
+	try:
+		with open(
+			"program_flow_live.json",
+			"r",
+			encoding="utf-8",
+		) as f:
+			data = json.load(f)
 
-        if data.get("date") != now.strftime("%Y%m%d"):
-            return None
+		if data.get("date") != now.strftime("%Y%m%d"):
+			return None
 
-        if data.get("stock_code") != "005930":
-            return None
+		if data.get("stock_code") != "005930":
+			return None
 
-        if data.get("unit") != "백만원":
-            return None
+		if data.get("unit") != "백만원":
+			return None
 
-        flow_time = str(data.get("current_time") or "").strip()
+		flow_time = str(data.get("current_time") or "").strip()
 
-        if len(flow_time) != 6 or not flow_time.isdigit():
-            return None
+		if len(flow_time) != 6 or not flow_time.isdigit():
+			return None
 
-        received_time = datetime.strptime(
-            now.strftime("%Y%m%d") + flow_time,
-            "%Y%m%d%H%M%S",
-        )
+		received_time = datetime.strptime(
+			now.strftime("%Y%m%d") + flow_time,
+			"%Y%m%d%H%M%S",
+		)
 
-        age = (now - received_time).total_seconds()
+		age = (now - received_time).total_seconds()
 
-        if age < 0 or age > ETF_FLOW_MAX_AGE_SECONDS:
-            return None
+		if age < 0 or age > ETF_FLOW_MAX_AGE_SECONDS:
+			return None
 
-        net_amount = int(data.get("current_net_amount"))
+		net_amount = int(data.get("current_net_amount"))
 
 		return {
-		    "net_amount": net_amount,
-		    "time": flow_time,
-		    "high_net_amount": int(data.get("high_net_amount", net_amount)),
-		    "low_net_amount": int(data.get("low_net_amount", net_amount)),
+			"net_amount": net_amount,
+			"time": flow_time,
+			"high_net_amount": int(data.get("high_net_amount", net_amount)),
+			"low_net_amount": int(data.get("low_net_amount", net_amount)),
 		}
 
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return None
+	except (OSError, ValueError, TypeError, json.JSONDecodeError):
+		return None
 
 
 def monitor_etf_signal(now, last_flow_signature):
-    """
-    실시간 수급이 새로 들어왔을 때만 ETF 전략을 실행한다.
-    이 함수는 신호 판단과 상태 갱신만 하며 주문은 내지 않는다.
-    """
-    if not ("09:00:00" <= now.strftime("%H:%M:%S") < "15:20:00"):
-        return last_flow_signature
+	"""
+	실시간 수급이 새로 들어왔을 때만 ETF 전략을 실행한다.
+	이 함수는 신호 판단과 상태 갱신만 하며 주문은 내지 않는다.
+	"""
+	if not ("09:00:00" <= now.strftime("%H:%M:%S") < "15:20:00"):
+		return last_flow_signature
 
-    flow = read_live_program_flow(now)
+	flow = read_live_program_flow(now)
 
-    if flow is None:
-        return last_flow_signature
+	if flow is None:
+		return last_flow_signature
 
 	signature = (
 		flow["time"],
@@ -275,28 +275,28 @@ def monitor_etf_signal(now, last_flow_signature):
 		flow["low_net_amount"],
 	)
 
-    if signature == last_flow_signature:
-        return last_flow_signature
+	if signature == last_flow_signature:
+		return last_flow_signature
 
 	signal = check_signal(
-	    flow["net_amount"],
-	    flow["high_net_amount"],
-	    flow["low_net_amount"],
+		flow["net_amount"],
+		flow["high_net_amount"],
+		flow["low_net_amount"],
 	)
 
-    if signal:
-        log(
-            f"ETF_SIGNAL_{signal}_"
-            f"{flow['net_amount']}_{flow['time']}"
-        )
-        print(
-            "[ETF 신호 감지 - 주문 미실행]",
-            signal,
-            flow["net_amount"],
-            flow["time"],
-        )
+	if signal:
+		log(
+			f"ETF_SIGNAL_{signal}_"
+			f"{flow['net_amount']}_{flow['time']}"
+		)
+		print(
+			"[ETF 신호 감지 - 주문 미실행]",
+			signal,
+			flow["net_amount"],
+			flow["time"],
+		)
 
-    return signature
+	return signature
 
 async def main():
 	token = None
@@ -332,8 +332,8 @@ async def main():
 			current = now.strftime("%H:%M:%S")
 			# 실시간 ETF 수급 감시 및 신호 판단
 			last_etf_flow_signature = monitor_etf_signal(
-			    now,
-			    last_etf_flow_signature,
+				now,
+				last_etf_flow_signature,
 			)
 			if now.date() != last_date:
 				last_date = now.date()
