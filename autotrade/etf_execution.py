@@ -472,11 +472,11 @@ def advance_etf_switch(token, websocket):
 		return
 
 	if order_type == "BUY_SUBMIT_UNKNOWN":
-	logger.critical(
-		"ETF 매수 주문 접수 여부 불명확. "
-		"중복 주문 방지를 위해 자동 진행 중단"
-	)
-	return
+		logger.critical(
+			"ETF 매수 주문 접수 여부 불명확. "
+			"중복 주문 방지를 위해 자동 진행 중단"
+		)
+		return
 
 	logger.warning(
 		"ETF 전환 중 알 수 없는 주문 상태: %s",
