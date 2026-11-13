@@ -1,3 +1,4 @@
+
 import asyncio
 import json
 import time
@@ -126,8 +127,6 @@ class WebSocketClient:
 		"""
 		선도주 및 후보 종목과 ETF 두 종목을
 		하나의 그룹으로 등록한다.
-
-		그룹 등록이 교체되어 ETF 등록이 사라지는 문제를 방지한다.
 		"""
 
 		state = load_state()
@@ -347,8 +346,6 @@ class WebSocketClient:
 			if isinstance(raw_code, list):
 				raw_code = raw_code[0] if raw_code else None
 
-			# 여러 종목을 등록한 상태에서 종목 코드가 없으면
-			# 다른 종목의 가격으로 오인하지 않도록 무시한다.
 			code = (
 				str(raw_code).replace("A", "")
 				if raw_code
@@ -507,6 +504,7 @@ class WebSocketClient:
 			return
 
 		try:
+			# 부호를 보존해야 하므로 abs()를 사용하지 않는다.
 			amount = int(
 				str(raw_amount)
 				.strip()
@@ -697,7 +695,10 @@ class WebSocketClient:
 
 			if not fill_no:
 				log("★ETF_FILL_ID_MISSING")
-				print("ETF 체결번호가 없어 중복 방지를 위해 반영하지 않았습니다.")
+				print(
+					"ETF 체결번호가 없어 중복 방지를 위해 "
+					"반영하지 않았습니다."
+				)
 				return
 
 			asyncio.create_task(
