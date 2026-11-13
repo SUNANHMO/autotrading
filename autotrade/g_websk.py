@@ -407,8 +407,8 @@ class WebSocketClient:
 		"""
 
 		current_price = self._to_int(values.get("10"))
-		best_bid = self._to_int(values.get("27"))
-		best_ask = self._to_int(values.get("28"))
+		best_ask = self._to_int(values.get("27"))
+		best_bid = self._to_int(values.get("28"))
 
 		if current_price <= 0 or best_bid <= 0 or best_ask <= 0:
 			return
