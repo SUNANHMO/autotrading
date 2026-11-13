@@ -244,10 +244,12 @@ def read_live_program_flow(now):
 
         net_amount = int(data.get("current_net_amount"))
 
-        return {
-            "net_amount": net_amount,
-            "time": flow_time,
-        }
+		return {
+		    "net_amount": net_amount,
+		    "time": flow_time,
+		    "high_net_amount": int(data.get("high_net_amount", net_amount)),
+		    "low_net_amount": int(data.get("low_net_amount", net_amount)),
+		}
 
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
@@ -266,12 +268,21 @@ def monitor_etf_signal(now, last_flow_signature):
     if flow is None:
         return last_flow_signature
 
-    signature = (flow["time"], flow["net_amount"])
+	signature = (
+		flow["time"],
+		flow["net_amount"],
+		flow["high_net_amount"],
+		flow["low_net_amount"],
+	)
 
     if signature == last_flow_signature:
         return last_flow_signature
 
-    signal = check_signal(flow["net_amount"])
+	signal = check_signal(
+	    flow["net_amount"],
+	    flow["high_net_amount"],
+	    flow["low_net_amount"],
+	)
 
     if signal:
         log(
