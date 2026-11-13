@@ -356,7 +356,7 @@ class WebSocketClient:
 				if not code:
 					continue
 
-				print(
+				#print(
 					f"[실시간 체결] "
 					f"code={code}, "
 					f"time={values.get('20')}, "
@@ -387,7 +387,7 @@ class WebSocketClient:
 			elif real_type == "0w":
 				self._record_program_flow(values)
 
-				print(
+				#print(
 					"[프로그램 수급 수신]",
 					f"code={code or '005930'}",
 					f"time={values.get('20')}",
@@ -421,7 +421,7 @@ class WebSocketClient:
 		quote["market_time"] = values.get("20")
 		quote["received_at"] = time.time()
 
-		print(
+		#print(
 			f"[ETF 호가 수신] code={code}, "
 			f"현재가={current_price:,}, "
 			f"매수호가={best_bid:,}, "
