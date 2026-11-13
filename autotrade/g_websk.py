@@ -357,13 +357,13 @@ class WebSocketClient:
 					continue
 
 				#print(
-					f"[실시간 체결] "
-					f"code={code}, "
-					f"time={values.get('20')}, "
-					f"현재가={values.get('10')}, "
-					f"시가={values.get('16')}, "
-					f"고가={values.get('17')}"
-				)
+				#	f"[실시간 체결] "
+				#	f"code={code}, "
+				#	f"time={values.get('20')}, "
+				#	f"현재가={values.get('10')}, "
+				#	f"시가={values.get('16')}, "
+				#	f"고가={values.get('17')}"
+				#)
 
 				# ETF 호가 저장
 				if code in ETF_CODES:
@@ -388,11 +388,11 @@ class WebSocketClient:
 				self._record_program_flow(values)
 
 				#print(
-					"[프로그램 수급 수신]",
-					f"code={code or '005930'}",
-					f"time={values.get('20')}",
-					f"net_amount={values.get('212')}",
-				)
+				#	"[프로그램 수급 수신]",
+				#	f"code={code or '005930'}",
+				#	f"time={values.get('20')}",
+				#	f"net_amount={values.get('212')}",
+				#)
 
 	# ------------------------------------------
 	# ETF 호가 관리
@@ -422,11 +422,11 @@ class WebSocketClient:
 		quote["received_at"] = time.time()
 
 		#print(
-			f"[ETF 호가 수신] code={code}, "
-			f"현재가={current_price:,}, "
-			f"매수호가={best_bid:,}, "
-			f"매도호가={best_ask:,}"
-		)
+		#	f"[ETF 호가 수신] code={code}, "
+		#	f"현재가={current_price:,}, "
+		#	f"매수호가={best_bid:,}, "
+		#	f"매도호가={best_ask:,}"
+		#)
 
 	def get_etf_quote(self, code, max_age_seconds=3):
 		"""
