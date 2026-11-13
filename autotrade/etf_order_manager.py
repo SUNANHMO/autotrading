@@ -6,6 +6,7 @@ VALID_POSITIONS = ("INVERSE", "KODEX200")
 
 
 def _clear_order(state):
+    """일반 주문 관련 상태만 초기화한다."""
     state["order_no"] = None
     state["order_type"] = None
     state["order_qty"] = 0
@@ -13,52 +14,82 @@ def _clear_order(state):
     state["remaining_qty"] = 0
 
 
+def _save(state):
+    save_state(state)
+    return state
+
+
+def _valid_order(order_no, order_qty):
+    return (
+        order_no is not None
+        and str(order_no).strip() != ""
+        and int(order_qty or 0) > 0
+    )
+
+
 def start_initial_buy(target_position, order_no, order_qty):
-    """최초 ETF 매수 주문이 접수된 뒤 주문 정보를 저장한다."""
+    """
+    최초 ETF 매수 주문 등록.
+    실제 보유 상태는 체결 및 계좌 잔고 확인 후 확정한다.
+    """
 
     if target_position not in VALID_POSITIONS:
-        raise ValueError("잘못된 ETF 종류")
+        raise ValueError("잘못된 ETF 매수 대상입니다.")
+
+    if not _valid_order(order_no, order_qty):
+        raise ValueError("잘못된 ETF 주문 정보입니다.")
 
     state = load_state()
 
-    if state["position"] != "NONE":
-        raise RuntimeError("이미 ETF를 보유 중입니다.")
+    if state.get("position") != "NONE":
+        raise RuntimeError("이미 ETF 보유 상태입니다.")
 
-    if state["order_no"] or state["switching"]:
-        raise RuntimeError("이미 진행 중인 주문이 있습니다.")
+    if state.get("order_no") or state.get("switching"):
+        raise RuntimeError("진행 중인 ETF 주문이 있습니다.")
 
-    if not order_no or order_qty <= 0:
-        raise ValueError("주문번호와 주문수량을 확인하세요.")
+    if state.get("closing_started"):
+        raise RuntimeError("마감 정리 상태에서는 신규 매수할 수 없습니다.")
 
     state["order_no"] = str(order_no)
     state["order_type"] = "BUY"
     state["order_qty"] = int(order_qty)
     state["filled_qty"] = 0
     state["remaining_qty"] = int(order_qty)
-    state["target_position"] = target_position
 
-    save_state(state)
+    state["target_position"] = target_position
+    state["switching"] = False
+
+    return _save(state)
 
 
 def start_switch_sell(target_position, order_no, order_qty):
-    """전환을 위해 기존 ETF 매도 주문이 접수된 뒤 호출한다."""
+    """
+    ETF 방향 전환을 위한 기존 ETF 매도 주문 등록.
+    매도 전량 체결 및 실제 잔고 0 확인 전까지
+    반대 ETF 매수를 허용하지 않는다.
+    """
 
     if target_position not in VALID_POSITIONS:
-        raise ValueError("잘못된 전환 대상")
+        raise ValueError("잘못된 전환 대상입니다.")
+
+    if not _valid_order(order_no, order_qty):
+        raise ValueError("잘못된 ETF 매도 주문 정보입니다.")
 
     state = load_state()
 
-    if state["position"] not in VALID_POSITIONS:
-        raise RuntimeError("매도할 기존 ETF가 없습니다.")
+    current_position = state.get("position")
 
-    if state["position"] == target_position:
+    if current_position not in VALID_POSITIONS:
+        raise RuntimeError("현재 ETF 보유 상태가 아닙니다.")
+
+    if current_position == target_position:
         raise RuntimeError("현재 보유 ETF와 전환 대상이 같습니다.")
 
-    if state["order_no"] or state["switching"]:
-        raise RuntimeError("이미 진행 중인 주문 또는 전환이 있습니다.")
+    if state.get("order_no") or state.get("switching"):
+        raise RuntimeError("이미 진행 중인 ETF 주문이 있습니다.")
 
-    if not order_no or order_qty <= 0:
-        raise ValueError("주문번호와 주문수량을 확인하세요.")
+    if state.get("closing_started"):
+        raise RuntimeError("마감 정리 중에는 방향 전환할 수 없습니다.")
 
     state["switching"] = True
     state["target_position"] = target_position
@@ -69,106 +100,179 @@ def start_switch_sell(target_position, order_no, order_qty):
     state["filled_qty"] = 0
     state["remaining_qty"] = int(order_qty)
 
-    save_state(state)
+    return _save(state)
+
+
+def start_closing_sell(order_no, order_qty):
+    """
+    장 마감 ETF 정리 매도 주문 등록.
+    방향 전환이 아닌 최종 청산이므로 target_position은 사용하지 않는다.
+    """
+
+    if not _valid_order(order_no, order_qty):
+        raise ValueError("잘못된 마감 매도 주문 정보입니다.")
+
+    state = load_state()
+
+    if state.get("position") not in VALID_POSITIONS:
+        raise RuntimeError("청산할 ETF 보유 상태가 아닙니다.")
+
+    if state.get("order_no"):
+        raise RuntimeError("기존 ETF 주문이 남아 있습니다.")
+
+    if state.get("switching"):
+        raise RuntimeError("ETF 방향 전환 중입니다.")
+
+    if state.get("closing_started"):
+        raise RuntimeError("마감 매도 주문이 이미 시작되었습니다.")
+
+    state["closing_started"] = True
+    state["closing_order_no"] = str(order_no)
+
+    state["order_no"] = str(order_no)
+    state["order_type"] = "CLOSE"
+    state["order_qty"] = int(order_qty)
+    state["filled_qty"] = 0
+    state["remaining_qty"] = int(order_qty)
+
+    state["target_position"] = None
+
+    return _save(state)
 
 
 def record_fill(order_no, fill_qty, fill_id):
     """
-    웹소켓 체결 이벤트를 반영한다.
-    fill_id는 체결 건마다 고유한 값이어야 한다.
+    실시간 체결 이벤트 기록.
+    주문번호와 체결번호를 조합하여 중복 체결을 방지한다.
     """
 
     state = load_state()
 
-    if str(state["order_no"]) != str(order_no):
+    if not order_no or str(order_no) != str(state.get("order_no")):
         return "UNKNOWN_ORDER"
 
     if not fill_id:
-        raise ValueError("중복 체결 방지를 위해 fill_id가 필요합니다.")
+        return "INVALID_FILL_ID"
+
+    fill_qty = int(fill_qty or 0)
+
+    if fill_qty <= 0:
+        return "INVALID_FILL_QTY"
+
+    composite_fill_id = f"{order_no}:{fill_id}"
 
     processed = state.get("processed_fill_ids", [])
 
-    if str(fill_id) in processed:
+    if composite_fill_id in processed:
         return "DUPLICATE_FILL"
 
-    fill_qty = int(fill_qty)
+    remaining_qty = int(state.get("remaining_qty") or 0)
 
-    if fill_qty <= 0:
-        raise ValueError("체결 수량이 올바르지 않습니다.")
+    if fill_qty > remaining_qty:
+        return "INVALID_FILL_QTY"
 
-    remaining = int(state["remaining_qty"])
+    state["filled_qty"] = (
+        int(state.get("filled_qty") or 0) + fill_qty
+    )
 
-    if fill_qty > remaining:
-        raise ValueError("체결 수량이 주문 잔량보다 많습니다.")
+    state["remaining_qty"] = remaining_qty - fill_qty
 
-    state["filled_qty"] += fill_qty
-    state["remaining_qty"] -= fill_qty
+    processed.append(composite_fill_id)
 
-    processed.append(str(fill_id))
+    # 중복 방지 목록은 최근 500개만 보관한다.
     state["processed_fill_ids"] = processed[-500:]
 
-    save_state(state)
-
     if state["remaining_qty"] > 0:
-        return "PARTIAL_FILL"
+        result = "PARTIAL_FILL"
 
-    if state["order_type"] == "SELL":
-        return "SELL_FILLED_WAIT_BALANCE"
+    elif state.get("order_type") == "SELL":
+        result = "SELL_FILLED_WAIT_BALANCE"
 
-    if state["order_type"] == "BUY":
-        return "BUY_FILLED_WAIT_BALANCE"
+    elif state.get("order_type") == "BUY":
+        result = "BUY_FILLED_WAIT_BALANCE"
 
-    return "UNKNOWN_ORDER_TYPE"
+    elif state.get("order_type") == "CLOSE":
+        result = "CLOSE_FILLED_WAIT_BALANCE"
+
+    else:
+        result = "UNKNOWN_ORDER_TYPE"
+
+    _save(state)
+
+    return result
 
 
 def confirm_sell_balance_zero(balance_qty):
     """
-    매도 주문 전량 체결 후 계좌 잔고가 0인지 확인한다.
-    0일 때만 반대 ETF 매수를 허용한다.
+    ETF 전환 매도 완료 확인.
+
+    다음 조건을 모두 만족해야 기존 ETF 보유 상태를 해제한다.
+    - 방향 전환 매도 주문
+    - 주문 수량 전량 체결
+    - 미체결 잔량 0
+    - 실제 계좌 잔고 0
     """
 
     state = load_state()
 
-    if not state["switching"]:
+    if not state.get("switching"):
         return None
 
-    if state["order_type"] != "SELL":
+    if state.get("order_type") != "SELL":
         return None
 
-    if state["remaining_qty"] != 0:
+    order_qty = int(state.get("order_qty") or 0)
+    filled_qty = int(state.get("filled_qty") or 0)
+    remaining_qty = int(state.get("remaining_qty") or 0)
+
+    if order_qty <= 0 or filled_qty != order_qty:
         return None
 
-    if int(balance_qty) != 0:
+    if remaining_qty != 0:
         return None
 
-    target = state["target_position"]
+    if int(balance_qty or 0) != 0:
+        return None
+
+    target_position = state.get("target_position")
+
+    if target_position not in VALID_POSITIONS:
+        return None
 
     state["position"] = "NONE"
     state["qty"] = 0
 
     _clear_order(state)
 
-    save_state(state)
+    _save(state)
 
-    return target
+    return target_position
 
 
 def start_switch_buy(order_no, order_qty):
-    """기존 ETF 잔고가 0임을 확인한 후 반대 ETF 매수 주문을 등록한다."""
+    """
+    기존 ETF 매도 완료 후 반대 ETF 매수 주문 등록.
+    """
+
+    if not _valid_order(order_no, order_qty):
+        raise ValueError("잘못된 ETF 매수 주문 정보입니다.")
 
     state = load_state()
 
-    if not state["switching"]:
-        raise RuntimeError("진행 중인 전환이 없습니다.")
+    if not state.get("switching"):
+        raise RuntimeError("ETF 방향 전환 상태가 아닙니다.")
 
-    if state["position"] != "NONE" or state["qty"] != 0:
-        raise RuntimeError("기존 ETF 잔고가 아직 남아 있습니다.")
+    if state.get("position") != "NONE":
+        raise RuntimeError("기존 ETF 보유 상태가 아직 해제되지 않았습니다.")
 
-    if state["order_no"]:
-        raise RuntimeError("기존 주문이 아직 남아 있습니다.")
+    if state.get("order_no"):
+        raise RuntimeError("기존 ETF 주문이 남아 있습니다.")
 
-    if not order_no or order_qty <= 0:
-        raise ValueError("주문번호와 주문수량을 확인하세요.")
+    if int(state.get("qty") or 0) != 0:
+        raise RuntimeError("기존 ETF 수량이 0이 아닙니다.")
+
+    if state.get("target_position") not in VALID_POSITIONS:
+        raise RuntimeError("전환 대상 ETF가 올바르지 않습니다.")
 
     state["order_no"] = str(order_no)
     state["order_type"] = "BUY"
@@ -176,45 +280,100 @@ def start_switch_buy(order_no, order_qty):
     state["filled_qty"] = 0
     state["remaining_qty"] = int(order_qty)
 
-    save_state(state)
+    return _save(state)
 
 
 def confirm_buy_balance(balance_qty):
     """
-    매수 주문 전량 체결 및 계좌 잔고 확인 후 보유 상태를 확정한다.
+    ETF 매수 완료 확인.
+
+    주문 전량 체결 및 실제 계좌 잔고 확인 후
+    ETF 보유 상태를 확정한다.
     """
 
     state = load_state()
 
-    if state["order_type"] != "BUY":
+    if state.get("order_type") != "BUY":
         return False
 
-    if state["remaining_qty"] != 0:
+    order_qty = int(state.get("order_qty") or 0)
+    filled_qty = int(state.get("filled_qty") or 0)
+    remaining_qty = int(state.get("remaining_qty") or 0)
+    balance_qty = int(balance_qty or 0)
+
+    if order_qty <= 0:
         return False
 
-    balance_qty = int(balance_qty)
-
-    if balance_qty <= 0:
+    if filled_qty != order_qty:
         return False
 
-    target = state["target_position"]
+    if remaining_qty != 0:
+        return False
 
-    if target not in VALID_POSITIONS:
-        raise RuntimeError("매수 대상 ETF 정보가 없습니다.")
+    if balance_qty != filled_qty:
+        return False
 
-    state["position"] = target
+    target_position = state.get("target_position")
+
+    if target_position not in VALID_POSITIONS:
+        return False
+
+    current_net_amount = int(
+        state.get("current_net_amount") or 0
+    )
+
+    state["position"] = target_position
     state["qty"] = balance_qty
 
-    # 새 보유 방향의 추적 기준을 현재 수급값으로 초기화
-    current = state["current_net_amount"]
-    state["high_net_amount"] = current
-    state["low_net_amount"] = current
+    state["high_net_amount"] = current_net_amount
+    state["low_net_amount"] = current_net_amount
 
     state["switching"] = False
     state["target_position"] = None
 
     _clear_order(state)
 
-    save_state(state)
+    _save(state)
 
     return True
+
+
+def confirm_closing_balance_zero(balance_qty):
+    """
+    마감 청산 완료 확인.
+    주문 전량 체결 및 실제 ETF 잔고 0일 때만
+    ETF 보유 상태를 NONE으로 변경한다.
+    """
+
+    state = load_state()
+
+    if not state.get("closing_started"):
+        return False
+
+    if state.get("order_type") != "CLOSE":
+        return False
+
+    order_qty = int(state.get("order_qty") or 0)
+    filled_qty = int(state.get("filled_qty") or 0)
+    remaining_qty = int(state.get("remaining_qty") or 0)
+
+    if order_qty <= 0 or filled_qty != order_qty:
+        return False
+
+    if remaining_qty != 0:
+        return False
+
+    if int(balance_qty or 0) != 0:
+        return False
+
+    state["position"] = "NONE"
+    state["qty"] = 0
+
+    state["switching"] = False
+    state["target_position"] = None
+
+    state["closing_started"] = True
+
+    _clear_order(state)
+
+    return _save(state)
