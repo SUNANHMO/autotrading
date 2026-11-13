@@ -682,52 +682,52 @@ class WebSocketClient:
 
 		print("ORDER REAL:", values)
 
-	    # --------------------------------------
-	    # ETF 취소 완료 이벤트 확인
-	    # --------------------------------------
-	    etf_code = str(
-	        values.get("9001") or ""
-	    ).replace("A", "")
+		# --------------------------------------
+		# ETF 취소 완료 이벤트 확인
+		# --------------------------------------
+		etf_code = str(
+			values.get("9001") or ""
+		).replace("A", "")
 	
-	    original_order_no = str(
-	        values.get("904") or ""
-	    ).strip()
+		original_order_no = str(
+			values.get("904") or ""
+		).strip()
 	
-	    order_type = str(values.get("905") or "")
+		order_type = str(values.get("905") or "")
 	
-	    if (
-	        etf_code in ETF_CODES
-	        and "취소" in order_type
-	        and status in ("확인", "취소")
-	    ):
-	        cancel_state = load_etf_state()
+		if (
+			etf_code in ETF_CODES
+			and "취소" in order_type
+			and status in ("확인", "취소")
+		):
+			cancel_state = load_etf_state()
 	
-	        requested_order_no = str(
-	            cancel_state.get("cancel_requested_order_no") or ""
-	        )
+			requested_order_no = str(
+				cancel_state.get("cancel_requested_order_no") or ""
+			)
 	
-	        if (
-	            requested_order_no
-	            and original_order_no == requested_order_no
-	        ):
-	            cancel_state["cancel_confirmed_order_no"] = (
-	                original_order_no
-	            )
+			if (
+				requested_order_no
+				and original_order_no == requested_order_no
+			):
+				cancel_state["cancel_confirmed_order_no"] = (
+					original_order_no
+				)
 	
-	            cancel_state["cancel_confirmed_time"] = (
-	                datetime.now().strftime("%H%M%S")
-	            )
+				cancel_state["cancel_confirmed_time"] = (
+					datetime.now().strftime("%H%M%S")
+				)
 	
-	            save_etf_state(cancel_state)
+				save_etf_state(cancel_state)
 	
-	            print(
-	                "[ETF 취소 완료 확인] "
-	                f"code={etf_code}, "
-	                f"original_order_no={original_order_no}"
-	            )
+				print(
+					"[ETF 취소 완료 확인] "
+					f"code={etf_code}, "
+					f"original_order_no={original_order_no}"
+				)
 	
-	            log(f"ETF_CANCEL_CONFIRMED_{original_order_no}")
-	            return
+				log(f"ETF_CANCEL_CONFIRMED_{original_order_no}")
+				return
 		
 		# ETF 주문인지 먼저 확인
 		etf_state = load_etf_state()
