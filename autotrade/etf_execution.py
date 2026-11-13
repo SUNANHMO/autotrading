@@ -43,6 +43,16 @@ def _get_account_holdings(token):
 			logger.error("ETF 계좌 조회 실패")
 			return None
 
+		if "stk_acnt_evlt_prst" not in account:
+			logger.error("ETF 계좌 응답에 보유종목 데이터가 없음")
+			return None
+
+		rows = account.get("stk_acnt_evlt_prst")
+
+		if not isinstance(rows, list):
+			logger.error("ETF 계좌 보유종목 데이터 형식 오류")
+			return None
+
 		return _parse_holdings(account)
 
 	except Exception:
