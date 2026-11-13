@@ -205,12 +205,6 @@ def record_fill(order_no, fill_qty, fill_id):
 
 
 def confirm_sell_balance_zero(balance_qty):
-	"""
-	전환 매도 전량 체결 및 실제 잔고 0 확인.
-
-	기존 주문 정보는 지우되 전환 상태는 SELL_DONE으로 보존한다.
-	"""
-
 	state = load_state()
 
 	if not state.get("switching"):
@@ -219,14 +213,10 @@ def confirm_sell_balance_zero(balance_qty):
 	if state.get("order_type") != "SELL":
 		return None
 
-	order_qty = int(state.get("order_qty") or 0)
-	filled_qty = int(state.get("filled_qty") or 0)
-	remaining_qty = int(state.get("remaining_qty") or 0)
-
-	if order_qty <= 0 or filled_qty != order_qty:
+	if int(state.get("filled_qty") or 0) != int(state.get("order_qty") or 0):
 		return None
 
-	if remaining_qty != 0:
+	if int(state.get("remaining_qty") or 0) != 0:
 		return None
 
 	if int(balance_qty or 0) != 0:
@@ -234,7 +224,7 @@ def confirm_sell_balance_zero(balance_qty):
 
 	target_position = state.get("target_position")
 
-	if target_position not in VALID_POSITIONS:
+	if target_position not in ("KODEX200", "INVERSE"):
 		return None
 
 	state["position"] = "NONE"
@@ -242,12 +232,12 @@ def confirm_sell_balance_zero(balance_qty):
 
 	_clear_order(state)
 
-	# 핵심: 매도 완료 후에도 전환 상태를 유지한다.
+	# 매도 완료 후 매수 대기 상태 유지
 	state["order_type"] = "SELL_DONE"
 	state["switching"] = True
 	state["target_position"] = target_position
 
-	_save(state)
+	save_state(state)
 
 	return target_position
 
@@ -392,3 +382,24 @@ def mark_switch_buy_unknown():
 		return True
 
 	return False
+
+def mark_switch_buy_unknown():
+	state = load_state()
+
+	if not state.get("switching"):
+		return False
+
+	if state.get("position") != "NONE":
+		return False
+
+	if state.get("order_type") != "SELL_DONE":
+		return False
+
+	_clear_order(state)
+
+	state["order_type"] = "BUY_SUBMIT_UNKNOWN"
+	state["switching"] = True
+
+	save_state(state)
+
+	return True
