@@ -298,9 +298,9 @@ async def monitor_etf_signal(now, last_flow_signature, token, websocket):
 					signal,
 					websocket,)
 				if started:
-					log(f"ETF_SWITCH_SELL_STARTED_{signal}")
+					print(f"ETF_SWITCH_SELL_STARTED_{signal}")
 				else:
-					log(f"ETF_SWITCH_SELL_NOT_STARTED_{signal}")
+					print(f"ETF_SWITCH_SELL_NOT_STARTED_{signal}")
 
 	return signature
 
