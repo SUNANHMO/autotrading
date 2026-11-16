@@ -1,131 +1,137 @@
-"""삼성전자 프로그램 수급의 읽기 전용 가상 재생.
+"""ETF 장중 복구의 읽기 전용 계좌 대조 (5단계).
 
-주의: 이 결과는 계좌 보유·미체결과 대조하기 전까지 실제 주문에 사용하지 않는다.
+복구 승인 판정만 수행하며 주문·상태 파일 변경은 하지 않는다.
+5단계에서는 h_schedule.py에 연결하지 않는다.
 """
 import json
 import os
 from datetime import datetime
 
-from a_config import REVERSE_AMOUNT
+from c2_program import get_etf_unfilled_orders
+from d_account import get_account, _normalize_code
+from etf_recovery import replay_program_history
+from etf_state import STATE_FILE
 
-HISTORY_FILE = "program_history.json"
-
-
-def parse_amount(raw):
-    """기존 ka90008 금액 표기(+3313, -3313, --3313)를 정수로 변환."""
-    if isinstance(raw, bool) or raw is None:
-        raise ValueError("금액 누락 또는 잘못된 형식")
-    value = str(raw).strip().replace(",", "")
-    if value.startswith("--"):
-        value = "-" + value[2:]
-    if not value or value in ("+", "-"):
-        raise ValueError("금액이 비어 있음")
-    return int(value)
+ETF_CODES = {"069500": "KODEX200", "114800": "INVERSE"}
 
 
-def replay_program_history(history_file=None, now=None, max_age_seconds=180):
-    """당일 09시 이후 기록을 검증한 후 가상 포지션을 재생한다.
+def _strict_qty(value):
+    if isinstance(value, bool) or value is None:
+        raise ValueError("보유수량 누락")
+    text = str(value).replace(",", "").strip()
+    if not text or not text.lstrip("+").isdigit():
+        raise ValueError(f"보유수량 형식 오류: {value!r}")
+    result = int(text)
+    if result < 0:
+        raise ValueError("보유수량 음수")
+    return result
 
-    파일 및 계좌 상태는 변경하지 않는다. 데이터가 불확실하면 예외로 중단한다.
-    """
-    now = now or datetime.now()
-    path = history_file or HISTORY_FILE
-    if not isinstance(max_age_seconds, (int, float)) or max_age_seconds < 0:
-        raise ValueError("최신성 허용 시간이 잘못됨")
-    if not ("090100" <= now.strftime("%H%M%S") < "152000"):
-        raise ValueError("장중 09:01~15:20에만 복구 재생 허용")
 
-    # 기존 JSON은 날짜 메타데이터가 없으므로 수정 시각으로 당일 생성 여부를 확인한다.
-    # 이는 데이터 출처의 완전성을 증명하지 않으므로 별도 검증이 필요하다.
-    modified = datetime.fromtimestamp(os.stat(path).st_mtime)
-    if modified.date() != now.date() or modified > now:
-        raise ValueError("과거 수급 파일 날짜 또는 수정 시각이 올바르지 않음")
+def _read_saved_state():
+    # etf_state.load_state()는 파일 누락 시 새 파일을 생성하므로 사용하지 않는다.
+    with open(STATE_FILE, encoding="utf-8") as handle:
+        state = json.load(handle)
+    if not isinstance(state, dict):
+        raise ValueError("ETF 상태 파일 형식 오류")
+    return state
 
-    with open(path, "r", encoding="utf-8") as file:
-        source_rows = json.load(file)
-    if not isinstance(source_rows, list) or not source_rows:
-        raise ValueError("과거 수급 데이터가 비어 있거나 리스트가 아님")
 
-    today = now.strftime("%Y%m%d")
-    current = now.strftime("%H%M%S")
-    rows = []
-    seen_times = set()
-    for index, row in enumerate(source_rows, 1):
-        if not isinstance(row, dict):
-            raise ValueError(f"{index}번째 행 형식 오류")
-        tm = str(row.get("tm", "")).strip()
-        if len(tm) != 6 or not tm.isdigit():
-            raise ValueError(f"{index}번째 시간 형식 오류: {tm!r}")
-        try:
-            datetime.strptime(tm, "%H%M%S")
-        except ValueError as exc:
-            raise ValueError(f"{index}번째 시간 값 오류: {tm}") from exc
-        if tm in seen_times:
-            raise ValueError(f"중복 수급 시간: {tm}")
-        seen_times.add(tm)
-        if row.get("date") not in (None, "", today):
-            raise ValueError(f"{tm} 조회 날짜 불일치")
-        if row.get("stk_cd") not in (None, "", "005930"):
-            raise ValueError(f"{tm} 종목코드 불일치")
-        try:
-            net = parse_amount(row["prm_netprps_amt"])
-            buy = parse_amount(row["prm_buy_amt"])
-            sell = parse_amount(row["prm_sell_amt"])
-        except (KeyError, ValueError, TypeError) as exc:
-            raise ValueError(f"{tm} 수급 금액 파싱 실패") from exc
-        if buy < 0 or sell < 0 or net != buy - sell:
-            raise ValueError(f"{tm} 수급 금액 검증 실패")
-        if "090000" <= tm <= "152000":
-            if tm > current:
-                raise ValueError(f"현재 시각 이후 수급 기록: {tm}")
-            rows.append((tm, net))
+def check_etf_recovery(token, now=None, history_file=None):
+    """읽기 전용 검증 결과 반환. 모든 불확실성은 approved=False."""
+    result = {"approved": False, "reason": None, "replay": None,
+              "account_position": None, "account_qty": None,
+              "unfilled_count": None, "unfilled_details": []}
+    try:
+        if not token:
+            raise ValueError("인증 토큰 없음")
+        now = now or datetime.now()
+        replay = replay_program_history(history_file=history_file, now=now)
+        if not isinstance(replay, dict) or replay.get("position") not in ("NONE", "KODEX200", "INVERSE"):
+            raise ValueError("가상 재생 결과 형식 오류")
+        result["replay"] = replay
 
-    rows.sort()
-    if not rows or rows[0][0] > "090100":
-        raise ValueError("09:00~09:01 시작 기록 누락")
-    last_dt = datetime.strptime(today + rows[-1][0], "%Y%m%d%H%M%S")
-    age = (now - last_dt).total_seconds()
-    if not 0 <= age <= max_age_seconds:
-        raise ValueError(f"과거 수급 최신성 부족: {age:.0f}초")
-
-    position = "NONE"
-    high = low = current_net = 0
-    signals = 0
-    for tm, net in rows:
-        current_net = net
-        if position == "NONE":
-            if net >= REVERSE_AMOUNT:
-                position = "KODEX200"
-            elif net <= -REVERSE_AMOUNT:
-                position = "INVERSE"
-            else:
+        account = get_account(token)
+        if not isinstance(account, dict) or not isinstance(account.get("stk_acnt_evlt_prst"), list):
+            raise ValueError("계좌 보유종목 응답 누락 또는 조회 실패")
+        holdings = account["stk_acnt_evlt_prst"]
+        etf_qty = {code: 0 for code in ETF_CODES}
+        lead_holdings = []
+        for row in holdings:
+            if not isinstance(row, dict):
+                raise ValueError("계좌 보유종목 행 형식 오류")
+            code = _normalize_code(row.get("stk_cd"))
+            qty = _strict_qty(row.get("rmnd_qty"))
+            if qty == 0:
                 continue
-            high = low = net
-            signals += 1
-        elif position == "INVERSE":
-            low = min(low, net)
-            if net >= low + REVERSE_AMOUNT:
-                position = "KODEX200"
-                high = low = net
-                signals += 1
-        else:
-            high = max(high, net)
-            if net <= high - REVERSE_AMOUNT:
-                position = "INVERSE"
-                high = low = net
-                signals += 1
+            if not code:
+                raise ValueError("보유 종목코드 누락")
+            if code in ETF_CODES:
+                etf_qty[code] += qty
+            else:
+                lead_holdings.append(code)
 
-    return {
-        "position": position,
-        "current_net_amount": current_net,
-        "high_net_amount": high,
-        "low_net_amount": low,
-        "last_time": rows[-1][0],
-        "total_rows": len(rows),
-        "skipped_rows": 0,
-        "signal_count": signals,
-    }
+        active = [code for code, qty in etf_qty.items() if qty > 0]
+        if len(active) > 1:
+            raise ValueError("ETF 두 종목 동시 보유")
+        account_position = ETF_CODES[active[0]] if active else "NONE"
+        result["account_position"] = account_position
+        result["account_qty"] = etf_qty[active[0]] if active else 0
 
+        unfilled = get_etf_unfilled_orders(token)
+        if unfilled is None or not isinstance(unfilled, list):
+            raise ValueError("ETF 미체결 조회 실패")
+        result["unfilled_count"] = len(unfilled)
+        # 키움 ka10075 원본 응답의 필드명을 유지하여 진단 정보를 남긴다.
+        # 매수/매도는 추정하지 않으며, 없는 필드는 '미제공'으로 표시한다.
+        for index, order in enumerate(unfilled, 1):
+            if not isinstance(order, dict):
+                raise ValueError(f"{index}번째 ETF 미체결 응답 형식 오류")
+            code = _normalize_code(order.get("stk_cd"))
+            if code not in ETF_CODES:
+                raise ValueError(f"{index}번째 ETF 미체결 종목코드 오류")
+            remaining = _strict_qty(order.get("oso_qty"))
+            if remaining == 0:
+                raise ValueError(f"{index}번째 ETF 미체결 수량 0")
+            result["unfilled_details"].append({
+                "code": code,
+                "name": ETF_CODES[code],
+                "order_no": order.get("ord_no"),
+                "order_qty_raw": order.get("ord_qty"),
+                "remaining_qty": remaining,
+                "side_raw": {key: order[key] for key in (
+                    "io_tp_nm", "io_tp", "ord_tp", "ord_tp_nm",
+                    "trde_tp", "trde_tp_nm", "buy_sell_tp",
+                ) if key in order},
+                "market_raw": order.get("stex_tp_txt"),
+            })
+        if unfilled:
+            raise ValueError("ETF 미체결 주문 존재")
+        if lead_holdings:
+            raise ValueError("주도주 또는 다른 종목 보유 중")
 
-if __name__ == "__main__":
-    print("이 모듈은 자동 실행하지 않습니다. 테스트에서만 replay_program_history()를 호출하세요.")
+        state = _read_saved_state()
+        if state.get("position") not in ("NONE", "KODEX200", "INVERSE"):
+            raise ValueError("저장된 ETF 포지션 오류")
+        if state["position"] != account_position:
+            raise ValueError("저장된 ETF 포지션과 실제 잔고 불일치")
+        if _strict_qty(state.get("qty")) != result["account_qty"]:
+            raise ValueError("저장된 ETF 수량과 실제 잔고 불일치")
+        if any(state.get(field) for field in (
+            "order_no", "order_type", "switching", "target_position",
+            "closing_started", "closing_order_no",
+        )):
+            raise ValueError("저장된 ETF 주문·전환·청산 진행 상태 존재")
+        for field in ("order_qty", "filled_qty", "remaining_qty"):
+            if _strict_qty(state.get(field)) != 0:
+                raise ValueError(f"저장된 ETF 주문 수량 잔존: {field}")
+        if replay["position"] != account_position:
+            raise ValueError("가상 재생 포지션과 실제 잔고 불일치")
+        if account_position != "NONE":
+            # 수급 최고·최저점은 체결 시각과 연결돼야 하므로 이 단계에서 자동 승인하지 않는다.
+            raise ValueError("보유 ETF의 실제 체결 시점·전환 기준점 미검증")
+
+        result["approved"] = True
+        result["reason"] = "가상 미보유·실제 미보유·미체결 없음·저장 상태 일치"
+    except Exception as exc:
+        result["reason"] = f"{type(exc).__name__}: {exc}"
+    return result
