@@ -45,8 +45,12 @@ def start_initial_buy(target_position, order_no, order_qty):
 	if state.get("position") != "NONE":
 		raise RuntimeError("이미 ETF 보유 상태입니다.")
 
-	if state.get("order_no") or state.get("switching"):
-		raise RuntimeError("진행 중인 ETF 주문이 있습니다.")
+	if (
+		state.get("order_no")
+		or state.get("order_type")
+		or state.get("switching")
+	):
+		raise RuntimeError("진행 중이거나 확인이 필요한 ETF 주문이 있습니다.")
 
 	if state.get("closing_started"):
 		raise RuntimeError("마감 정리 상태에서는 신규 매수할 수 없습니다.")
@@ -62,6 +66,32 @@ def start_initial_buy(target_position, order_no, order_qty):
 
 	return _save(state)
 
+
+def mark_initial_buy_unknown(target_position):
+	"""최초 매수 주문 접수 여부 불명확 시 중복 주문 차단."""
+
+	state = load_state()
+
+	if target_position not in VALID_POSITIONS:
+		return False
+
+	if state.get("position") != "NONE":
+		return False
+
+	if (
+		state.get("order_no")
+		or state.get("order_type")
+		or state.get("switching")
+		or state.get("closing_started")
+	):
+		return False
+
+	state["order_type"] = "INITIAL_BUY_SUBMIT_UNKNOWN"
+	state["target_position"] = target_position
+	state["switching"] = False
+
+	_save(state)
+	return True
 
 def start_switch_sell(target_position, order_no, order_qty):
 	"""ETF 방향 전환을 위한 기존 ETF 매도 주문 등록."""
