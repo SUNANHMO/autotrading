@@ -326,9 +326,13 @@ async def monitor_etf_signal(now, last_flow_signature, token, websocket):
 	return signature
 
 async def main():
-	token = None
-	websocket = None
-	last_date = date.today()
+    token = None
+    websocket = None
+
+    # ETF 복구 기능 완성 전에는 자동 주문 차단
+    etf_recovery_completed = False
+
+    last_date = date.today()
 	last_etf_flow_signature = None
 	executed = {
 		"morning_check": False,
@@ -357,28 +361,26 @@ async def main():
 		try:
 			now = datetime.now()
 			current = now.strftime("%H:%M:%S")
-			# ETF 전환 진행
-			# 15:20 이후에는 반대 ETF 신규 매수를 진행하지 않는다.
-			if (
-				token
-				and "09:00:00" <= current < "15:20:00"
-			):
-				await asyncio.to_thread(
-					advance_etf_switch,
-					token,
-					websocket,
-				)
-			# 실시간 ETF 수급 감시 및 신호 판단
-			last_etf_flow_signature = await monitor_etf_signal(
-				now,
-				last_etf_flow_signature,
-				token,
-				websocket,
-			)
-			if now.date() != last_date:
-				last_date = now.date()
-				token = None
-				last_etf_flow_signature = None
+            # ETF 복구 완료 전에는 ETF 주문 및 신호 판단 차단
+            if etf_recovery_completed:
+                if token and "09:00:00" <= current < "15:20:00":
+                    await asyncio.to_thread(
+                        advance_etf_switch,
+                        token,
+                        websocket,
+                    )
+
+                last_etf_flow_signature = await monitor_etf_signal(
+                    now,
+                    last_etf_flow_signature,
+                    token,
+                    websocket,
+                )
+            if now.date() != last_date:
+                last_date = now.date()
+                token = None
+                last_etf_flow_signature = None
+                etf_recovery_completed = False
 				
 				for key in executed:
 					executed[key] = False
