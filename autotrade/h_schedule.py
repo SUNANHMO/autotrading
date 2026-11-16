@@ -32,7 +32,10 @@ from f_order import (
 	market_sell,
 	cancel_take_profit,)
 from g_websk import WebSocketClient
-from etf_execution import (start_etf_switch,advance_etf_switch,)
+from etf_execution import (
+	start_etf_initial_buy,
+	start_etf_switch,
+	advance_etf_switch,)
 from i_healthcheck import process_check
 
 
@@ -288,7 +291,23 @@ async def monitor_etf_signal(now, last_flow_signature, token, websocket):
 			flow["net_amount"],
 			flow["time"],)
 
-		if signal in ("SWITCH_TO_KODEX200", "SWITCH_TO_INVERSE"):
+		if signal in ("BUY_KODEX200", "BUY_INVERSE"):
+			if not token:
+				log("★ETF_INITIAL_BUY_NO_TOKEN")
+			else:
+				started = await asyncio.to_thread(
+					start_etf_initial_buy,
+					token,
+					signal,
+					websocket,
+				)
+		
+				if started:
+					print(f"ETF_INITIAL_BUY_STARTED_{signal}")
+				else:
+					print(f"ETF_INITIAL_BUY_NOT_STARTED_{signal}")
+		
+		elif signal in ("SWITCH_TO_KODEX200", "SWITCH_TO_INVERSE"):
 			if not token:
 				log("★ETF_SWITCH_NO_TOKEN")
 			else:
@@ -296,7 +315,9 @@ async def monitor_etf_signal(now, last_flow_signature, token, websocket):
 					start_etf_switch,
 					token,
 					signal,
-					websocket,)
+					websocket,
+				)
+		
 				if started:
 					print(f"ETF_SWITCH_SELL_STARTED_{signal}")
 				else:
