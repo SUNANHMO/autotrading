@@ -1,8 +1,9 @@
-"""키움 ka90008 삼성전자 당일 프로그램 순매수 이력 조회 전용 (주문 없음).
-실행: python test_program_history_fixed.py
+"""키움 ka90008 삼성전자 날짜별 프로그램 순매수 이력 조회 전용 (주문 없음).
+실행: python test_program_history_by_date.py YYYYMMDD
 """
 import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 import requests
@@ -33,7 +34,15 @@ def main():
     seen_keys = set()
     try:
         for page in range(1, 101):
-            response = requests.post(url, headers=headers, json=params, timeout=20)
+            if page > 1:
+                time.sleep(1.2)
+            for attempt in range(5):
+                response = requests.post(url, headers=headers, json=params, timeout=20)
+                if response.status_code != 429:
+                    break
+                wait = 5 * (attempt + 1)
+                print(f'[RATE LIMIT] 429 / {wait}초 대기 후 {page}페이지 재시도 ({attempt + 1}/5)')
+                time.sleep(wait)
             response.raise_for_status()
             result = response.json()
             if str(result.get('return_code')) != '0':
