@@ -40,6 +40,7 @@ from i_healthcheck import process_check
 from etf_recovery_check import check_etf_recovery
 from etf_step11_diagnostic import diagnose_etf_recovery
 from etf_virtual_strategy import replay_virtual_strategy, plan_virtual_alignment
+from etf_scheduler_diagnostic_step21 import query_and_evaluate_step21
 
 
 ETF_CODES = {"069500", "114800"}
@@ -521,6 +522,22 @@ async def main():
                             except Exception as virtual_exc:
                                 print(f"[ETF 가상 전략 검증 실패] {type(virtual_exc).__name__}: {virtual_exc}")
                                 virtual = None
+
+                            # 21단계: 실계좌/미체결과 가상 포지션의 읽기 전용 통합 진단.
+                            # 이 진단은 주문/취소를 호출하지 않고 ETF 자동 주문 차단을 유지한다.
+                            if virtual is not None:
+                                try:
+                                    step21 = await asyncio.to_thread(
+                                        query_and_evaluate_step21,
+                                        token, virtual['position'], current.replace(':', ''),
+                                    )
+                                    print('[ETF 21단계 정합성 진단 — 주문 차단 유지] '
+                                          f"상태={step21['status']}, "
+                                          f"조치={step21['action']}, "
+                                          f"미체결={step21.get('pending_count')}, "
+                                          f"주문허가={step21['can_submit_order']}")
+                                except Exception as diag_exc:
+                                    print(f'[ETF 21단계 진단 보류] {type(diag_exc).__name__}: {diag_exc}')
 
                             # 6단계: 읽기 전용 계좌 대조. 결과가 승인이라도 주문 차단은 해제하지 않는다.
                             if not executed["recovery_check_logged"]:
