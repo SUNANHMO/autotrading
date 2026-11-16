@@ -603,24 +603,83 @@ def find_take_profit_order(token, code):
 			return order_no, profit_market
 	return None, None
 
+
 def get_etf_unfilled_orders(token):
-	# ETF 두 종목의 전체 미체결 매수/매도 주문 조회
-	etf_codes = ("069500", "114800")
-	params = {"all_stk_tp": "0", "trde_tp": "0", "stex_tp": "0"}
-	all_orders = []
-	cont_yn = "N"
-	next_key = ""
-	while True:
-			result, response_cont, response_key = fn_ka10075(token, params, cont_yn, next_key)
-			if result.get("return_code", 0) != 0:
-					print("[ETF 미체결 조회 오류]", result)
-					return None
-			for item in result.get("oso", []):
-					code = item.get("stk_cd", "").replace("A", "")
-					if code in etf_codes and int(item.get("oso_qty", 0)) > 0:
-							all_orders.append(item)
-			if response_cont != "Y" or not response_key:
-					break
-			cont_yn = "Y"
-			next_key = response_key
-	return all_orders
+    """
+    ETF 두 종목의 전체 미체결 매수/매도 주문 조회.
+    조회 실패 또는 페이지 누락 가능성이 있으면 None 반환.
+    정상 조회 후 미체결 주문이 없으면 [] 반환.
+    """
+    etf_codes = ("069500", "114800")
+    params = {
+        "all_stk_tp": "0",
+        "trde_tp": "0",
+        "stex_tp": "0",
+    }
+
+    all_orders = []
+    cont_yn = "N"
+    next_key = ""
+    requested_keys = set()
+
+    try:
+        while True:
+            if next_key in requested_keys:
+                raise ValueError("미체결 조회 페이지 키 중복")
+            requested_keys.add(next_key)
+
+            result, response_cont, response_key = fn_ka10075(
+                token, params, cont_yn, next_key
+            )
+
+            if not isinstance(result, dict):
+                raise ValueError("API 응답 형식 오류")
+
+            return_code = result.get("return_code")
+            if return_code is None or str(return_code).strip() != "0":
+                raise ValueError(f"미체결 조회 API 오류: {result}")
+
+            orders = result.get("oso", [])
+            if not isinstance(orders, list):
+                raise ValueError("미체결 주문 목록 형식 오류")
+
+            for item in orders:
+                if not isinstance(item, dict):
+                    raise ValueError("미체결 주문 데이터 형식 오류")
+
+                code = str(item.get("stk_cd", "")).replace("A", "").strip()
+
+                if code not in etf_codes:
+                    continue
+
+                raw_qty = item.get("oso_qty")
+                if raw_qty is None:
+                    raise ValueError("미체결 수량 누락")
+
+                qty = int(str(raw_qty).replace(",", "").strip())
+
+                if qty < 0:
+                    raise ValueError("미체결 수량 음수")
+
+                if qty > 0:
+                    all_orders.append(item)
+
+            if response_cont == "Y":
+                if not response_key:
+                    raise ValueError("다음 페이지 키 누락")
+
+                cont_yn = "Y"
+                next_key = response_key
+            elif response_cont == "N":
+                break
+            else:
+                raise ValueError(
+                    f"페이지 연속조회 상태 불명확: {response_cont}"
+                )
+
+        print(f"[ETF 미체결 조회 완료] {len(all_orders)}건")
+        return all_orders
+
+    except Exception as e:
+        print(f"[ETF 미체결 조회 실패] {e}")
+        return None
