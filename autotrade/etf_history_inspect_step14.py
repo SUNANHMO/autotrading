@@ -29,7 +29,7 @@ def inspect_rows(rows):
 def main():
     p = argparse.ArgumentParser(description='ETF 주문 내역 응답 키만 확인(주문 없음)')
     p.add_argument('--date', default=datetime.now().strftime('%Y%m%d'))
-    p.add_argument('--query-type', default='0')
+    p.add_argument('--query-type', default='1', choices=('1', '2', '3', '4'))
     args = p.parse_args()
     if len(args.date) != 8 or not args.date.isdigit():
         p.error('날짜는 YYYYMMDD 형식이어야 합니다')
