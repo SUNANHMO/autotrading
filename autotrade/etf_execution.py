@@ -4,6 +4,8 @@ import logging
 from d_account import get_account, _parse_holdings
 from etf_state import load_state
 from etf_order_manager import (
+	start_initial_buy,
+	mark_initial_buy_unknown,
 	start_switch_sell,
 	confirm_sell_balance_zero,
 	start_switch_buy,
@@ -29,6 +31,11 @@ POSITION_TO_CODE = {
 SIGNAL_TO_POSITION = {
 	"SWITCH_TO_KODEX200": "KODEX200",
 	"SWITCH_TO_INVERSE": "INVERSE",
+}
+
+INITIAL_SIGNAL_TO_POSITION = {
+	"BUY_KODEX200": "KODEX200",
+	"BUY_INVERSE": "INVERSE",
 }
 
 BALANCE_CHECK_INTERVAL = 3
@@ -118,6 +125,120 @@ def _get_fresh_quote(websocket, code):
 		"best_ask": best_ask,
 	}
 
+def start_etf_initial_buy(token, signal, websocket):
+	"""
+	최초 ETF 진입 매수.
+
+	실제 계좌에 다른 보유 종목이 없고,
+	내부 ETF 상태가 NONE일 때만 매수한다.
+	"""
+
+	target_position = INITIAL_SIGNAL_TO_POSITION.get(signal)
+
+	if not target_position:
+		return False
+
+	state = load_state()
+
+	if state.get("position") != "NONE":
+		logger.warning("ETF 최초 매수 중단: 이미 보유 상태")
+		return False
+
+	if (
+		state.get("order_no")
+		or state.get("order_type")
+		or state.get("switching")
+		or state.get("closing_started")
+	):
+		logger.warning("ETF 최초 매수 중단: 기존 주문 또는 처리 상태 존재")
+		return False
+
+	# 실제 계좌 잔고 확인
+	holdings = _get_account_holdings(token)
+
+	if holdings is None:
+		logger.warning("ETF 최초 매수 대기: 계좌 조회 실패")
+		return False
+
+	if _has_other_holding(holdings):
+		logger.warning("ETF 최초 매수 중단: 계좌에 기존 보유 종목 존재")
+		return False
+
+	target_code = POSITION_TO_CODE[target_position]
+
+	# 매수 직전 유효 호가 확인
+	quote = _get_fresh_quote(websocket, target_code)
+
+	if quote is None:
+		logger.warning("ETF 최초 매수 대기: 유효한 호가 없음")
+		return False
+
+	buy_price = quote["best_bid"]
+
+	# 계좌의 ETF 매수 가능 금액으로 수량 계산
+	try:
+		buy_qty = int(
+			get_etf_buy_qty(token, target_code, buy_price)
+		)
+	except Exception:
+		logger.exception("ETF 최초 매수 가능 수량 조회 실패")
+		return False
+
+	if buy_qty <= 0:
+		logger.warning("ETF 최초 매수 대기: 매수 가능 수량 없음")
+		return False
+
+	# 실제 매수 주문
+	try:
+		order_no = etf_buy(
+			token,
+			target_code,
+			buy_qty,
+			buy_price,
+		)
+	except Exception:
+		mark_initial_buy_unknown(target_position)
+		logger.critical(
+			"ETF 최초 매수 주문 접수 여부 불명확. "
+			"중복 주문 방지를 위해 자동 진행 중단",
+			exc_info=True,
+		)
+		return False
+
+	if not order_no:
+		mark_initial_buy_unknown(target_position)
+		logger.critical(
+			"ETF 최초 매수 주문번호 확인 실패. "
+			"중복 주문 방지를 위해 자동 재주문 차단"
+		)
+		return False
+
+	# 주문 접수 후 내부 상태 등록
+	try:
+		start_initial_buy(
+			target_position,
+			order_no,
+			buy_qty,
+		)
+	except Exception:
+		mark_initial_buy_unknown(target_position)
+		logger.critical(
+			"ETF 최초 매수 접수 후 내부 상태 등록 실패. "
+			"수동 확인 필요: %s",
+			order_no,
+			exc_info=True,
+		)
+		return False
+
+	logger.info(
+		"ETF 최초 매수 주문 접수: %s / 수량=%s / 가격=%s / 주문번호=%s",
+		target_code,
+		buy_qty,
+		buy_price,
+		order_no,
+	)
+
+	return True
 
 def start_etf_switch(token, signal, websocket):
 	"""
@@ -144,6 +265,7 @@ def start_etf_switch(token, signal, websocket):
 
 	if (
 		state.get("order_no")
+		or state.get("order_type")
 		or state.get("switching")
 		or state.get("closing_started")
 	):
@@ -356,7 +478,22 @@ def advance_etf_switch(token, websocket):
 
 	state = load_state()
 
-	if not state.get("switching"):
+	order_type = state.get("order_type")
+	
+	is_initial_buy = (
+		order_type == "BUY"
+		and not state.get("switching")
+		and state.get("position") == "NONE"
+	)
+
+	if order_type == "INITIAL_BUY_SUBMIT_UNKNOWN":
+		logger.critical(
+			"ETF 최초 매수 주문 접수 여부 불명확. "
+			"실제 미체결 주문과 계좌 잔고 수동 확인 필요"
+		)
+		return	
+	
+	if not state.get("switching") and not is_initial_buy:
 		return
 
 	order_type = state.get("order_type")
@@ -481,12 +618,21 @@ def advance_etf_switch(token, websocket):
 			)
 			return
 
+		was_switching = bool(state.get("switching"))
+		
 		if confirm_buy_balance(actual_qty):
-			logger.info(
-				"ETF 전환 완료: %s / 실제 보유=%s주",
-				target_position,
-				actual_qty,
-			)
+			if was_switching:
+				logger.info(
+					"ETF 전환 완료: %s / 실제 보유=%s주",
+					target_position,
+					actual_qty,
+				)
+			else:
+				logger.info(
+					"ETF 최초 진입 완료: %s / 실제 보유=%s주",
+					target_position,
+					actual_qty,
+				)
 		else:
 			logger.error("ETF 매수 잔고 확인 후 내부 상태 반영 실패")
 
