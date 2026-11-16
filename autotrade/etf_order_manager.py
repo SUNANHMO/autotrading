@@ -392,3 +392,31 @@ def mark_switch_buy_unknown():
 	save_state(state)
 
 	return True
+
+def mark_switch_sell_unknown(target_position):
+	"""
+	매도 주문 접수 여부가 불명확할 때
+	중복 매도를 차단한다.
+	"""
+	state = load_state()
+
+	if state.get("position") not in VALID_POSITIONS:
+		return False
+
+	if target_position not in VALID_POSITIONS:
+		return False
+
+	if state.get("position") == target_position:
+		return False
+
+	# 이미 주문이 등록됐다면 기존 주문 상태를 보존한다.
+	if state.get("order_no") or state.get("switching"):
+		return False
+
+	state["switching"] = True
+	state["target_position"] = target_position
+	state["order_type"] = "SELL_SUBMIT_UNKNOWN"
+
+	_save(state)
+
+	return True
