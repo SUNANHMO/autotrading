@@ -17,6 +17,9 @@ def _account_qty(token):
     if not isinstance(account, dict) or not isinstance(account.get("stk_acnt_evlt_prst"), list):
         return None
     holdings = _parse_holdings(account)
+    # 재시작 직후 주도주 상태 파일이 비어 있어도 실제 주도주 보유를 우선한다.
+    if any(h["code"] not in CODES.values() for h in holdings):
+        return "LEAD_HOLDING"
     return {code: next((h["qty"] for h in holdings if h["code"] == code), 0)
             for code in CODES.values()}
 
@@ -40,6 +43,10 @@ def reconcile_etf(token, websocket, target, *, lead_priority=False, closing=Fals
     orders = get_etf_unfilled_orders(token)
     if qty is None or orders is None:
         return "WAIT_ACCOUNT"
+    if qty == "LEAD_HOLDING" and not closing:
+        return "LEAD_PRIORITY"
+    if qty == "LEAD_HOLDING":
+        return "WAIT_LEAD_HOLDING"
     # 주문 취소 요청 후에는 미체결 조회에서 사라질 때까지 추가 주문하지 않는다.
     if orders:
         if state.get("cancel_requested"):
