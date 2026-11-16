@@ -9,6 +9,7 @@ from etf_order_manager import (
 	start_switch_buy,
 	confirm_buy_balance,
 	mark_switch_buy_unknown,
+	mark_switch_sell_unknown,
 )
 
 from f_order import (
@@ -186,11 +187,20 @@ def start_etf_switch(token, signal, websocket):
 			sell_price,
 		)
 	except Exception:
-		logger.exception("ETF 전환 매도 주문 요청 중 오류")
+		mark_switch_sell_unknown(target_position)
+		logger.critical(
+			"ETF 매도 주문 접수 여부 불명확. "
+			"중복 주문 방지를 위해 자동 진행 중단",
+			exc_info=True,
+		)
 		return False
 
 	if not order_no:
-		logger.error("ETF 전환 매도 주문 접수 실패")
+		mark_switch_sell_unknown(target_position)
+		logger.critical(
+			"ETF 매도 주문번호 확인 실패. "
+			"중복 주문 방지를 위해 자동 진행 중단"
+		)
 		return False
 
 	try:
@@ -200,6 +210,7 @@ def start_etf_switch(token, signal, websocket):
 			actual_qty,
 		)
 	except Exception:
+		mark_switch_sell_unknown(target_position)
 		logger.critical(
 			"매도 주문 접수 후 내부 상태 등록 실패. "
 			"추가 주문 금지 및 수동 확인 필요: %s",
@@ -487,7 +498,14 @@ def advance_etf_switch(token, websocket):
 			"중복 주문 방지를 위해 자동 진행 중단"
 		)
 		return
-
+		
+	if order_type == "SELL_SUBMIT_UNKNOWN":
+		logger.critical(
+			"ETF 매도 주문 접수 여부 불명확. "
+			"실제 미체결 주문 및 계좌 잔고 수동 확인 필요"
+		)
+		return
+		
 	logger.warning(
 		"ETF 전환 중 알 수 없는 주문 상태: %s",
 		order_type,
