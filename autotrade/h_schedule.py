@@ -148,7 +148,7 @@ def check_program_history(token, stock_code="005930"):
 
 	all_rows = []
 	seen_keys = set()
-	seen_times = set()
+	seen_times = {}
 	completed = False
 	max_pages = 100
 
@@ -180,8 +180,27 @@ def check_program_history(token, stock_code="005930"):
 					raise ValueError(f"유효하지 않은 수급 시간: {tm}") from exc
 
 				if tm in seen_times:
-					raise ValueError(f"중복 수급 시간: {tm}")
-				seen_times.add(tm)
+					fields = (
+						"prm_netprps_amt",
+						"prm_buy_amt",
+						"prm_sell_amt",
+					)
+				
+					previous = {
+						key: seen_times[tm].get(key)
+						for key in fields
+					}
+					current_row = {
+						key: row.get(key)
+						for key in fields
+					}
+				
+					raise ValueError(
+						f"중복 수급 시간: {tm}, "
+						f"이전={previous}, 현재={current_row}"
+					)
+				
+				seen_times[tm] = row
 
 				try:
 					net = parse_amount(row["prm_netprps_amt"])
@@ -383,476 +402,476 @@ async def monitor_etf_signal(now, last_flow_signature, token, websocket):
 	return signature
 
 async def main():
-    token = None
-    websocket = None
-
-    # ETF 복구 기능 완성 전에는 자동 주문 차단
-    etf_recovery_completed = False
-
-    last_date = date.today()
-    last_etf_flow_signature = None
-    executed = {
-        "morning_check": False,
-        "token": False,
-        "search": False,
-        "nxt_tp": False,
-        "krx_tp": False,
-        "monitor": False,
-        "buy": False,
-        "afternoon_check": False,
-        "force_sell": False,
-        "buy_check": False,
-        "cancel_tp": False,
-        "history_test": False,
-        "websocket_started": False,
-    }
-
-    ACCOUNT_RETRY_INTERVAL = 5
-    ETF_HISTORY_RETRY_INTERVAL = 60
-    last_etf_history_attempt = 0.0
-
-    last_account_retry = {
-        "token": 0.0,
-        "search": 0.0,
-    }
-
-    while True:
-        try:
-            now = datetime.now()
-            current = now.strftime("%H:%M:%S")
-            # ETF 복구 완료 전에는 ETF 주문 및 신호 판단 차단
-            if etf_recovery_completed:
-                if token and "09:00:00" <= current < "15:20:00":
-                    await asyncio.to_thread(
-                        advance_etf_switch,
-                        token,
-                        websocket,
-                    )
-
-                last_etf_flow_signature = await monitor_etf_signal(
-                    now,
-                    last_etf_flow_signature,
-                    token,
-                    websocket,
-                )
-            if now.date() != last_date:
-                last_date = now.date()
-                token = None
-                last_etf_flow_signature = None
-                etf_recovery_completed = False
-                last_etf_history_attempt = 0.0
-                
-                for key in executed:
-                    executed[key] = False
-
-                last_account_retry = {
-                    "token": 0.0,
-                    "search": 0.0,
-                }
-
-                log(f"DAY_{now:%m%d}")
-
-            if not executed["history_test"] and token is None:
-                token = get_token()
-
-            if (
-                token
-                and websocket is None
-                and MORNING_CHECK_TIME <= current < CANCEL_TAKE_PROFIT_TIME
-                and not executed["websocket_started"]
-            ):
-                websocket = WebSocketClient(token)
-                asyncio.create_task(websocket.run())
-                executed["websocket_started"] = True
-                print("BACKGROUND WEBSOCKET START REQUESTED")
-
-            # 장중 과거 수급 조회: 실패 또는 오래된 기록이면 완료 처리하지 않는다.
-            # 이 검사는 ETF 주문 차단을 해제하지 않는다.
-            if (
-                token
-                and "09:01:00" <= current < "15:20:00"
-                and not executed["history_test"]
-                and time.monotonic() - last_etf_history_attempt
-                    >= ETF_HISTORY_RETRY_INTERVAL
-            ):
-                last_etf_history_attempt = time.monotonic()
-                history_rows = await asyncio.to_thread(
-                    check_program_history, token, "005930",
-                )
-
-                if history_rows:
-                    market_rows = [
-                        row for row in history_rows
-                        if "090000" <= row["tm"] <= current.replace(":", "")
-                    ]
-                    if market_rows:
-                        first_time = market_rows[0]["tm"]
-                        latest_time = market_rows[-1]["tm"]
-                        latest_dt = datetime.strptime(
-                            now.strftime("%Y%m%d") + latest_time,
-                            "%Y%m%d%H%M%S",
-                        )
-                        age = (now - latest_dt).total_seconds()
-                        if first_time <= "090100" and 0 <= age <= 180:
-                            executed["history_test"] = True
-                            print("ETF 과거 수급 최신성 검사 통과 (주문 차단 유지)")
-                        else:
-                            log("★ETF_HISTORY_STALE_OR_INCOMPLETE")
-                            print(f"[ETF 과거 수급 미완료] 최초={first_time}, 최신={latest_time}, 지연={age:.0f}초")
-                    else:
-                        log("★ETF_HISTORY_NO_MARKET_ROWS")
-
-            # 06:55 시스템 점검
-            if (
-                MORNING_CHECK_TIME <= current < TOKEN_TIME
-                and not executed["morning_check"]
-            ):
-                executed["morning_check"] = True
-
-                token, websocket = await ensure_websocket(
-                    token,
-                    websocket,
-                )
-
-                if websocket is None:
-                    log("★WEBSK_MORNING")
-                else:
-                    await process_check(token, websocket, "morning")
-
-            # 07:00 토큰 및 계좌 준비
-            if (
-                TOKEN_TIME <= current < SEARCH_TIME
-                and not executed["token"]
-            ):
-                token = get_token()
-
-                if not token:
-                    log("★TOKEN")
-
-                else:
-                    if websocket is not None:
-                        websocket.token = token
-                        await websocket.disconnect()
-
-                    retry_now = time.monotonic()
-
-                    if (
-                        retry_now - last_account_retry["token"]
-                        >= ACCOUNT_RETRY_INTERVAL
-                    ):
-                        last_account_retry["token"] = retry_now
-
-                        summary = get_account_summary(token)
-
-                        if summary.get("cash") is None:
-                            log("★ACCOUNT")
-
-                        else:
-                            executed["token"] = True
-
-                            sync_account_state(
-                                token,
-                                "existing",
-                            )
-
-                            if summary.get("etf_holding"):
-                                log("ETF_HOLDING_AT_START")
-
-                            print("[07:00] Trading preparation complete")
-
-            # 07:30 조건 검색 및 후보 선정
-            if (
-                SEARCH_TIME <= current < NXT_TAKE_PROFIT_TIME
-                and not executed["search"]
-            ):
-                token, websocket = await ensure_websocket(
-                    token,
-                    websocket,
-                )
-
-                if websocket is None:
-                    log("★WEBSK_SEARCH")
-
-                else:
-                    retry_now = time.monotonic()
-
-                    if (
-                        retry_now - last_account_retry["search"]
-                        >= ACCOUNT_RETRY_INTERVAL
-                    ):
-                        last_account_retry["search"] = retry_now
-
-                        summary = get_account_summary(token)
-
-                        if summary.get("cash") is None:
-                            log("★ACCOUNT_SEARCH")
-
-                        else:
-                            executed["search"] = True
-
-                            sync_account_state(
-                                token,
-                                "existing",
-                            )
-
-                            state = load_state()
-
-                            if summary.get("has_holding"):
-                                log("SKIP_SEARCH_HOLDING")
-
-                            else:
-                                codes = await websocket.search_condition()
-                                candidate = get_buy_code(token, codes)
-
-                                state = load_state()
-
-                                if candidate is None:
-                                    state["candidate_code"] = None
-                                    state["candidate_name"] = None
-                                    save_state(state)
-                                    log("No_B")
-
-                                else:
-                                    state["candidate_code"] = candidate
-                                    state["candidate_name"] = None
-                                    save_state(state)
-
-                                    await websocket.register_price(candidate)
-                                    log(f"B_{candidate}")
-
-            # 08:00 NXT 익절 주문
-            if (
-                NXT_TAKE_PROFIT_TIME <= current < KRX_TAKE_PROFIT_TIME
-                and not executed["nxt_tp"]
-            ):
-                executed["nxt_tp"] = True
-                state = load_state()
-
-                if (
-                    state.get("holding")
-                    and state.get("position_origin") == "existing"
-                ):
-                    order_no = take_profit_nxt(token)
-                    log("N_O" if order_no else "N_X")
-
-            # 08:30 KRX 익절 주문
-            if (
-                KRX_TAKE_PROFIT_TIME <= current < MONITOR_START_TIME
-                and not executed["krx_tp"]
-            ):
-                executed["krx_tp"] = True
-                state = load_state()
-
-                if (
-                    state.get("holding")
-                    and state.get("position_origin") == "existing"
-                ):
-                    order_no = take_profit_krx(token)
-                    log("K_O" if order_no else "K_X")
-
-            # 08:59:55 실시간 감시 준비
-            if (
-                MONITOR_START_TIME <= current < "09:00:10"
-                and not executed["monitor"]
-            ):
-                executed["monitor"] = True
-
-                token, websocket = await ensure_websocket(
-                    token,
-                    websocket,
-                )
-
-                if websocket is None:
-                    log("★WEBSK_MONITOR")
-
-                else:
-                    state = load_state()
-                    codes = []
-
-                    if state.get("holding") and state.get("code"):
-                        codes.append(state["code"])
-
-                    if state.get("candidate_code"):
-                        codes.append(state["candidate_code"])
-
-                    await websocket.register_prices(codes)
-
-                    if codes:
-                        log(f"TR_{'_'.join(codes)}")
-                    else:
-                        log("No_H")
-
-            # 08:59:55 신규 매수 주문
-            if (
-                BUY_TIME <= current < "09:00:10"
-                and not executed["buy"]
-            ):
-                executed["buy"] = True
-
-                token, websocket = await ensure_websocket(
-                    token,
-                    websocket,
-                )
-
-                if websocket is None:
-                    log("★WEBSK_BUY")
-
-                else:
-                    state = load_state()
-                    summary = get_account_summary(token)
-
-                    if summary.get("cash") is None:
-                        log("★ACCOUNT_BUY")
-
-                    elif summary.get("has_holding"):
-                        log("SKIP_BUY_HOLDING")
-
-                    elif not state.get("candidate_code"):
-                        log("No_B")
-
-                    elif state.get("buy_order_no"):
-                        log("SKIP_BUY_ORDER_EXISTS")
-
-                    else:
-                        expected_price = websocket.price_data.get(
-                            "expected_price",
-                            0,
-                        )
-
-                        if expected_price <= 0:
-                            log("★EXPECTED_PRICE")
-
-                        else:
-                            buy_price = get_upper_price(
-                                expected_price * 1.01
-                            )
-
-                            order_no = buy(
-                                token,
-                                state["candidate_code"],
-                                buy_price,
-                            )
-
-                            log(
-                                f"O_{order_no}"
-                                if order_no
-                                else "★ORDER"
-                            )
-
-            # 15:15 토큰 갱신 및 시스템 점검
-            if (
-                AFTERNOON_CHECK_TIME <= current < FORCE_SELL_TIME
-                and not executed["afternoon_check"]
-            ):
-                executed["afternoon_check"] = True
-
-                new_token = get_token()
-
-                if new_token:
-                    token = new_token
-
-                    if websocket is not None:
-                        websocket.token = token
-                        await websocket.reconnect()
-
-                else:
-                    log("★TOKEN_REFRESH")
-
-                await process_check(
-                    token,
-                    websocket,
-                    "afternoon",
-                )
-
-            # 15:25 기존 보유분 강제 매도
-            if (
-                FORCE_SELL_TIME <= current < "15:26:00"
-                and not executed["force_sell"]
-            ):
-                executed["force_sell"] = True
-                state = load_state()
-
-                if (
-                    state.get("holding")
-                    and state.get("position_origin") == "existing"
-                ):
-                    log("FORCE_EXISTING")
-                    order_no = market_sell(token)
-
-                    if not order_no:
-                        log("★FORCE_SELL")
-
-                else:
-                    print("15:25: 신규 매수분은 익일까지 보유 가능")
-
-            # 당일 매수 점검
-            if (
-                BUY_CHECK_TIME <= current < "08:56:00"
-                and not executed["buy_check"]
-            ):
-                executed["buy_check"] = True
-
-                await process_check(
-                    token,
-                    websocket,
-                    "buy",
-                )
-
-            # 15:31 하루 마감 처리
-            if (
-                CANCEL_TAKE_PROFIT_TIME <= current < "15:32:00"
-                and not executed["cancel_tp"]
-            ):
-                executed["cancel_tp"] = True
-
-                token, websocket = await ensure_websocket(
-                    token,
-                    websocket,
-                )
-
-                if websocket is None:
-                    log("★WEBSK_CANCEL_TAKE_PROFIT")
-
-                else:
-                    state = load_state()
-
-                    if (
-                        state.get("take_profit_order_no")
-                        and state.get("position_origin") == "existing"
-                    ):
-                        order_no = cancel_take_profit(token)
-
-                        if order_no:
-                            log("CANCEL_EXISTING_TP")
-                        else:
-                            log("★CANCEL_EXISTING_TP")
-
-                    await asyncio.sleep(2)
-
-                    summary = get_account_summary(token)
-
-                    if summary.get("cash") is None:
-                        log("★ACCOUNT")
-
-                    else:
-                        holding = (
-                            "O" if summary["has_holding"] else "X"
-                        )
-
-                        log(f"A_{summary['cash']}_{holding}")
-
-                    await websocket.stop()
-                    websocket = None
-
-                    print("WebSocket stopped for today")
-
-            await asyncio.sleep(0.1)
-
-        except Exception as e:
-            log(f"★SCHEDULE_{type(e).__name__}")
-            print("Schedule error:", e)
-            await asyncio.sleep(1)
+	token = None
+	websocket = None
+
+	# ETF 복구 기능 완성 전에는 자동 주문 차단
+	etf_recovery_completed = False
+
+	last_date = date.today()
+	last_etf_flow_signature = None
+	executed = {
+		"morning_check": False,
+		"token": False,
+		"search": False,
+		"nxt_tp": False,
+		"krx_tp": False,
+		"monitor": False,
+		"buy": False,
+		"afternoon_check": False,
+		"force_sell": False,
+		"buy_check": False,
+		"cancel_tp": False,
+		"history_test": False,
+		"websocket_started": False,
+	}
+
+	ACCOUNT_RETRY_INTERVAL = 5
+	ETF_HISTORY_RETRY_INTERVAL = 60
+	last_etf_history_attempt = 0.0
+
+	last_account_retry = {
+		"token": 0.0,
+		"search": 0.0,
+	}
+
+	while True:
+		try:
+			now = datetime.now()
+			current = now.strftime("%H:%M:%S")
+			# ETF 복구 완료 전에는 ETF 주문 및 신호 판단 차단
+			if etf_recovery_completed:
+				if token and "09:00:00" <= current < "15:20:00":
+					await asyncio.to_thread(
+						advance_etf_switch,
+						token,
+						websocket,
+					)
+
+				last_etf_flow_signature = await monitor_etf_signal(
+					now,
+					last_etf_flow_signature,
+					token,
+					websocket,
+				)
+			if now.date() != last_date:
+				last_date = now.date()
+				token = None
+				last_etf_flow_signature = None
+				etf_recovery_completed = False
+				last_etf_history_attempt = 0.0
+				
+				for key in executed:
+					executed[key] = False
+
+				last_account_retry = {
+					"token": 0.0,
+					"search": 0.0,
+				}
+
+				log(f"DAY_{now:%m%d}")
+
+			if not executed["history_test"] and token is None:
+				token = get_token()
+
+			if (
+				token
+				and websocket is None
+				and MORNING_CHECK_TIME <= current < CANCEL_TAKE_PROFIT_TIME
+				and not executed["websocket_started"]
+			):
+				websocket = WebSocketClient(token)
+				asyncio.create_task(websocket.run())
+				executed["websocket_started"] = True
+				print("BACKGROUND WEBSOCKET START REQUESTED")
+
+			# 장중 과거 수급 조회: 실패 또는 오래된 기록이면 완료 처리하지 않는다.
+			# 이 검사는 ETF 주문 차단을 해제하지 않는다.
+			if (
+				token
+				and "09:01:00" <= current < "15:20:00"
+				and not executed["history_test"]
+				and time.monotonic() - last_etf_history_attempt
+					>= ETF_HISTORY_RETRY_INTERVAL
+			):
+				last_etf_history_attempt = time.monotonic()
+				history_rows = await asyncio.to_thread(
+					check_program_history, token, "005930",
+				)
+
+				if history_rows:
+					market_rows = [
+						row for row in history_rows
+						if "090000" <= row["tm"] <= current.replace(":", "")
+					]
+					if market_rows:
+						first_time = market_rows[0]["tm"]
+						latest_time = market_rows[-1]["tm"]
+						latest_dt = datetime.strptime(
+							now.strftime("%Y%m%d") + latest_time,
+							"%Y%m%d%H%M%S",
+						)
+						age = (now - latest_dt).total_seconds()
+						if first_time <= "090100" and 0 <= age <= 180:
+							executed["history_test"] = True
+							print("ETF 과거 수급 최신성 검사 통과 (주문 차단 유지)")
+						else:
+							log("★ETF_HISTORY_STALE_OR_INCOMPLETE")
+							print(f"[ETF 과거 수급 미완료] 최초={first_time}, 최신={latest_time}, 지연={age:.0f}초")
+					else:
+						log("★ETF_HISTORY_NO_MARKET_ROWS")
+
+			# 06:55 시스템 점검
+			if (
+				MORNING_CHECK_TIME <= current < TOKEN_TIME
+				and not executed["morning_check"]
+			):
+				executed["morning_check"] = True
+
+				token, websocket = await ensure_websocket(
+					token,
+					websocket,
+				)
+
+				if websocket is None:
+					log("★WEBSK_MORNING")
+				else:
+					await process_check(token, websocket, "morning")
+
+			# 07:00 토큰 및 계좌 준비
+			if (
+				TOKEN_TIME <= current < SEARCH_TIME
+				and not executed["token"]
+			):
+				token = get_token()
+
+				if not token:
+					log("★TOKEN")
+
+				else:
+					if websocket is not None:
+						websocket.token = token
+						await websocket.disconnect()
+
+					retry_now = time.monotonic()
+
+					if (
+						retry_now - last_account_retry["token"]
+						>= ACCOUNT_RETRY_INTERVAL
+					):
+						last_account_retry["token"] = retry_now
+
+						summary = get_account_summary(token)
+
+						if summary.get("cash") is None:
+							log("★ACCOUNT")
+
+						else:
+							executed["token"] = True
+
+							sync_account_state(
+								token,
+								"existing",
+							)
+
+							if summary.get("etf_holding"):
+								log("ETF_HOLDING_AT_START")
+
+							print("[07:00] Trading preparation complete")
+
+			# 07:30 조건 검색 및 후보 선정
+			if (
+				SEARCH_TIME <= current < NXT_TAKE_PROFIT_TIME
+				and not executed["search"]
+			):
+				token, websocket = await ensure_websocket(
+					token,
+					websocket,
+				)
+
+				if websocket is None:
+					log("★WEBSK_SEARCH")
+
+				else:
+					retry_now = time.monotonic()
+
+					if (
+						retry_now - last_account_retry["search"]
+						>= ACCOUNT_RETRY_INTERVAL
+					):
+						last_account_retry["search"] = retry_now
+
+						summary = get_account_summary(token)
+
+						if summary.get("cash") is None:
+							log("★ACCOUNT_SEARCH")
+
+						else:
+							executed["search"] = True
+
+							sync_account_state(
+								token,
+								"existing",
+							)
+
+							state = load_state()
+
+							if summary.get("has_holding"):
+								log("SKIP_SEARCH_HOLDING")
+
+							else:
+								codes = await websocket.search_condition()
+								candidate = get_buy_code(token, codes)
+
+								state = load_state()
+
+								if candidate is None:
+									state["candidate_code"] = None
+									state["candidate_name"] = None
+									save_state(state)
+									log("No_B")
+
+								else:
+									state["candidate_code"] = candidate
+									state["candidate_name"] = None
+									save_state(state)
+
+									await websocket.register_price(candidate)
+									log(f"B_{candidate}")
+
+			# 08:00 NXT 익절 주문
+			if (
+				NXT_TAKE_PROFIT_TIME <= current < KRX_TAKE_PROFIT_TIME
+				and not executed["nxt_tp"]
+			):
+				executed["nxt_tp"] = True
+				state = load_state()
+
+				if (
+					state.get("holding")
+					and state.get("position_origin") == "existing"
+				):
+					order_no = take_profit_nxt(token)
+					log("N_O" if order_no else "N_X")
+
+			# 08:30 KRX 익절 주문
+			if (
+				KRX_TAKE_PROFIT_TIME <= current < MONITOR_START_TIME
+				and not executed["krx_tp"]
+			):
+				executed["krx_tp"] = True
+				state = load_state()
+
+				if (
+					state.get("holding")
+					and state.get("position_origin") == "existing"
+				):
+					order_no = take_profit_krx(token)
+					log("K_O" if order_no else "K_X")
+
+			# 08:59:55 실시간 감시 준비
+			if (
+				MONITOR_START_TIME <= current < "09:00:10"
+				and not executed["monitor"]
+			):
+				executed["monitor"] = True
+
+				token, websocket = await ensure_websocket(
+					token,
+					websocket,
+				)
+
+				if websocket is None:
+					log("★WEBSK_MONITOR")
+
+				else:
+					state = load_state()
+					codes = []
+
+					if state.get("holding") and state.get("code"):
+						codes.append(state["code"])
+
+					if state.get("candidate_code"):
+						codes.append(state["candidate_code"])
+
+					await websocket.register_prices(codes)
+
+					if codes:
+						log(f"TR_{'_'.join(codes)}")
+					else:
+						log("No_H")
+
+			# 08:59:55 신규 매수 주문
+			if (
+				BUY_TIME <= current < "09:00:10"
+				and not executed["buy"]
+			):
+				executed["buy"] = True
+
+				token, websocket = await ensure_websocket(
+					token,
+					websocket,
+				)
+
+				if websocket is None:
+					log("★WEBSK_BUY")
+
+				else:
+					state = load_state()
+					summary = get_account_summary(token)
+
+					if summary.get("cash") is None:
+						log("★ACCOUNT_BUY")
+
+					elif summary.get("has_holding"):
+						log("SKIP_BUY_HOLDING")
+
+					elif not state.get("candidate_code"):
+						log("No_B")
+
+					elif state.get("buy_order_no"):
+						log("SKIP_BUY_ORDER_EXISTS")
+
+					else:
+						expected_price = websocket.price_data.get(
+							"expected_price",
+							0,
+						)
+
+						if expected_price <= 0:
+							log("★EXPECTED_PRICE")
+
+						else:
+							buy_price = get_upper_price(
+								expected_price * 1.01
+							)
+
+							order_no = buy(
+								token,
+								state["candidate_code"],
+								buy_price,
+							)
+
+							log(
+								f"O_{order_no}"
+								if order_no
+								else "★ORDER"
+							)
+
+			# 15:15 토큰 갱신 및 시스템 점검
+			if (
+				AFTERNOON_CHECK_TIME <= current < FORCE_SELL_TIME
+				and not executed["afternoon_check"]
+			):
+				executed["afternoon_check"] = True
+
+				new_token = get_token()
+
+				if new_token:
+					token = new_token
+
+					if websocket is not None:
+						websocket.token = token
+						await websocket.reconnect()
+
+				else:
+					log("★TOKEN_REFRESH")
+
+				await process_check(
+					token,
+					websocket,
+					"afternoon",
+				)
+
+			# 15:25 기존 보유분 강제 매도
+			if (
+				FORCE_SELL_TIME <= current < "15:26:00"
+				and not executed["force_sell"]
+			):
+				executed["force_sell"] = True
+				state = load_state()
+
+				if (
+					state.get("holding")
+					and state.get("position_origin") == "existing"
+				):
+					log("FORCE_EXISTING")
+					order_no = market_sell(token)
+
+					if not order_no:
+						log("★FORCE_SELL")
+
+				else:
+					print("15:25: 신규 매수분은 익일까지 보유 가능")
+
+			# 당일 매수 점검
+			if (
+				BUY_CHECK_TIME <= current < "08:56:00"
+				and not executed["buy_check"]
+			):
+				executed["buy_check"] = True
+
+				await process_check(
+					token,
+					websocket,
+					"buy",
+				)
+
+			# 15:31 하루 마감 처리
+			if (
+				CANCEL_TAKE_PROFIT_TIME <= current < "15:32:00"
+				and not executed["cancel_tp"]
+			):
+				executed["cancel_tp"] = True
+
+				token, websocket = await ensure_websocket(
+					token,
+					websocket,
+				)
+
+				if websocket is None:
+					log("★WEBSK_CANCEL_TAKE_PROFIT")
+
+				else:
+					state = load_state()
+
+					if (
+						state.get("take_profit_order_no")
+						and state.get("position_origin") == "existing"
+					):
+						order_no = cancel_take_profit(token)
+
+						if order_no:
+							log("CANCEL_EXISTING_TP")
+						else:
+							log("★CANCEL_EXISTING_TP")
+
+					await asyncio.sleep(2)
+
+					summary = get_account_summary(token)
+
+					if summary.get("cash") is None:
+						log("★ACCOUNT")
+
+					else:
+						holding = (
+							"O" if summary["has_holding"] else "X"
+						)
+
+						log(f"A_{summary['cash']}_{holding}")
+
+					await websocket.stop()
+					websocket = None
+
+					print("WebSocket stopped for today")
+
+			await asyncio.sleep(0.1)
+
+		except Exception as e:
+			log(f"★SCHEDULE_{type(e).__name__}")
+			print("Schedule error:", e)
+			await asyncio.sleep(1)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+	asyncio.run(main())
