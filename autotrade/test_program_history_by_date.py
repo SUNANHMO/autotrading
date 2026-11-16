@@ -35,7 +35,7 @@ def main():
     try:
         for page in range(1, 101):
             if page > 1:
-                time.sleep(1.2)
+                time.sleep(0.5)
             for attempt in range(5):
                 response = requests.post(url, headers=headers, json=params, timeout=20)
                 if response.status_code != 429:
@@ -75,6 +75,61 @@ def main():
     out = Path(f'program_history_{date}.json')
     out.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding='utf-8')
     print(f'\n[RESULT] 총 {len(records)}건 / 저장: {out.resolve()}')
+    # 현재 ETF 가상 전략과 동일한 고점·저점 대비 200억 방향 전환 계산.
+    # 원본 조회 데이터는 보존하며, 거래 종료 후 데이터는 전략 분석에서 제외.
+    def amount(value):
+        value = str(value).strip()
+        if value.startswith('--'):
+            return -int(value[2:])
+        return int(value.lstrip('+'))
+
+    position, high, low = 'NONE', None, None
+    signals = []
+    for row in records:
+        tm = str(row.get('tm', '')).zfill(6)
+        if tm > '152000':
+            break
+        try:
+            net = amount(row['prm_netprps_amt'])
+            buy = amount(row['prm_buy_amt'])
+            sell = amount(row['prm_sell_amt'])
+        except (KeyError, ValueError, TypeError) as exc:
+            print(f'[FAIL] 수급값 해석 실패: {tm}: {exc}')
+            return
+        if net != buy - sell:
+            print(f'[FAIL] 수급값 불일치: {tm}: {net} != {buy} - {sell}')
+            return
+        if high is None:
+            high = low = net
+            continue
+        old = position
+        if position == 'NONE':
+            high, low = max(high, net), min(low, net)
+            if high - net >= 20000:
+                position = 'INVERSE'
+            elif net - low >= 20000:
+                position = 'KODEX200'
+        elif position == 'KODEX200':
+            high = max(high, net)
+            if high - net >= 20000:
+                position = 'INVERSE'
+        else:
+            low = min(low, net)
+            if net - low >= 20000:
+                position = 'KODEX200'
+        if position != old:
+            high = low = net
+            signals.append({'time': tm, 'position': position, 'net_amount_million': net})
+
+    print(f'\n[ETF 가상 포지션 전환] 총 {len(signals)}회 / 15:20 이전')
+    for signal in signals:
+        tm = signal['time']
+        formatted = f'{tm[:2]}:{tm[2:4]}:{tm[4:6]}'
+        print(f"  {formatted}  {signal['position']:<8}  순매수 {signal['net_amount_million']/100:,.2f}억")
+    signals_out = Path(f'etf_position_signals_{date}.json')
+    signals_out.write_text(json.dumps(signals, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(f'[포지션 기록 저장] {signals_out.resolve()}')
+
     if records:
         print('[데이터 필드]', ', '.join(records[0].keys()))
         print('[최초 10건]')
