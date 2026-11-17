@@ -168,6 +168,10 @@ def check_program_history(token, stock_code="005930", *, persist_live=True):
 					raise ValueError(f"{page}페이지 행 형식 오류")
 
 				tm = str(row.get("tm", "")).strip()
+				# 보관용 조회는 전체 페이지를 요청하되 저장 범위 밖 행은 제외한다.
+				# 실시간 전략의 엄격한 검증 방식은 변경하지 않는다.
+				if not persist_live and len(tm) == 6 and tm.isdigit() and not ("083000" <= tm <= "153100"):
+					continue
 				if len(tm) != 6 or not tm.isdigit():
 					raise ValueError(f"잘못된 수급 시간: {tm!r}")
 				try:
@@ -193,11 +197,17 @@ def check_program_history(token, stock_code="005930", *, persist_live=True):
 				# 키움 연속조회에서 동일 시각의 동일 행이 반복될 수 있다.
 				# 완전히 동일한 행만 제거하고, 같은 시각에 값이 다르면 중단한다.
 				if tm in seen_times:
+					if not persist_live:
+						# 보관 전용: API 반환 순서에서 마지막 행을 대표값으로 사용.
+						# 응답 순서가 실제 발생 시각 순서라는 보장은 없다.
+						seen_times[tm] = row
+						duplicate_count += 1
+						continue
 					if row != seen_times[tm]:
 						raise ValueError(
-							f"동일 시각 수급 내용 불일치: {tm}, "
-							f"이전={seen_times[tm]}, 현재={row}"
-						)
+							 f"동일 시각 수급 내용 불일치: {tm}, "
+							 f"이전={seen_times[tm]}, 현재={row}"
+							)
 					duplicate_count += 1
 					continue
 
@@ -223,6 +233,8 @@ def check_program_history(token, stock_code="005930", *, persist_live=True):
 		if not all_rows:
 			raise ValueError("과거 수급 데이터가 비어 있음")
 
+		if not persist_live:
+			all_rows = list(seen_times.values())
 		all_rows.sort(key=lambda row: row["tm"])
 		# 장중 조회 결과는 09:00 부근부터 현재까지 충분히 최신이어야 한다.
 		now = datetime.now()

@@ -22,16 +22,19 @@ def archive_program_history(rows, *, trading_date=None, directory=None):
         if len(tm) != 6 or not tm.isdigit():
             raise ValueError(f"시간 형식 오류: {tm}")
         datetime.strptime(tm, "%H%M%S")
+        if not ("083000" <= tm <= "153100"):
+            continue
         # 검증된 원본 값의 단위(백만원)를 유지한다.
         raw = str(row["prm_netprps_amt"]).replace(",", "").replace("--", "-")
         net = int(raw)
-        if tm in seen:
-            if seen[tm] != net:
-                raise ValueError(f"동일 시각 순매수 충돌: {tm}")
-            continue
+        # 보관 전용: 입력 순서상 마지막 값을 채택한다.
         seen[tm] = net
-        simplified.append({"tm": tm, "prm_netprps_amt": net})
-    simplified.sort(key=lambda item: item["tm"])
+    simplified = [
+        {"tm": tm, "prm_netprps_amt": net}
+        for tm, net in sorted(seen.items())
+    ]
+    if not simplified:
+        raise ValueError("08:30~15:31 범위의 수급 기록이 없습니다")
     # 기존 날짜 파일이 더 늦은 시각 또는 더 많은 기록을 담으면 덮어쓰지 않는다.
     if output.exists():
         with output.open(encoding="utf-8") as f:
