@@ -121,7 +121,7 @@ def sync_account_state(token, origin="existing"):
 	return True
 
 
-def check_program_history(token, stock_code="005930"):
+def check_program_history(token, stock_code="005930", *, persist_live=True):
 	"""전체 페이지와 수급 금액을 검증한 뒤에만 과거 데이터를 저장한다."""
 	import os
 	import tempfile
@@ -237,6 +237,9 @@ def check_program_history(token, stock_code="005930"):
 			age = (now - latest_dt).total_seconds()
 			if not 0 <= age <= 180:
 				raise ValueError(f"과거 수급 최신성 부족: {age:.0f}초")
+		# 장 마감 보관용 신규 조회는 실시간 원본 파일을 건드리지 않는다.
+		if not persist_live:
+			return all_rows
 		# 검증된 결과만 임시 파일에 기록하고 원자적으로 교체한다.
 		output = os.path.abspath("program_history.json")
 		tmp_path = None
@@ -684,35 +687,6 @@ async def main():
             ):
                 executed["cancel_tp"] = True
 
-                # 장 마감 수급 이력: 계좌조회/주문 처리와 독립적으로 실패를 격리한다.
-                # 기존 조회 함수의 전체 페이지/금액 검증을 통과한 행만 날짜별로 보관한다.
-                try:
-                    if token is None:
-                        token = await asyncio.to_thread(get_token)
-                    if not token:
-                        raise ValueError("수급 저장용 토큰 없음")
-                    closing_rows = await asyncio.to_thread(
-                        check_program_history, token, "005930",
-                    )
-                    if not closing_rows:
-                        raise ValueError("장 마감 수급 이력 조회/검증 실패")
-                    # 14시대에 끊긴 과거 이력을 완전한 장 마감 자료로 저장하지 않는다.
-                    latest_market_time = max(
-                        (row["tm"] for row in closing_rows if "090000" <= row["tm"] <= "153100"),
-                        default="000000",
-                    )
-                    if latest_market_time < "151900":
-                        raise ValueError(f"장 마감 수급 기록 부족: 마지막 {latest_market_time}")
-                    archive_path, archive_count, archive_updated = await asyncio.to_thread(
-                        archive_program_history, closing_rows,
-                        trading_date=now.strftime("%Y%m%d"),
-                    )
-                    print(f"[수급 날짜별 저장] {archive_path}: {archive_count}건, "
-                          f"{'갱신' if archive_updated else '기존 파일 유지'}")
-                except Exception as archive_exc:
-                    print(f"[수급 날짜별 저장 실패] {archive_exc}")
-                    log(f"★HISTORY_ARCHIVE_{type(archive_exc).__name__}")
-
                 token, websocket = await ensure_websocket(
                     token,
                     websocket,
@@ -753,6 +727,28 @@ async def main():
                     websocket = None
 
                     print("WebSocket stopped for today")
+
+                # 장 마감 수급 이력: 계좌조회/주문 처리와 독립적으로 실패를 격리한다.
+                # 기존 조회 함수의 전체 페이지/금액 검증을 통과한 행만 날짜별로 보관한다.
+                try:
+                    if token is None:
+                        token = await asyncio.to_thread(get_token)
+                    if not token:
+                        raise ValueError("수급 저장용 토큰 없음")
+                    closing_rows = await asyncio.to_thread(
+                        check_program_history, token, "005930", persist_live=False,
+                    )
+                    if not closing_rows:
+                        raise ValueError("장 마감 수급 이력 조회/검증 실패")
+                    archive_path, archive_count, archive_updated = await asyncio.to_thread(
+                        archive_program_history, closing_rows,
+                        trading_date=now.strftime("%Y%m%d"),
+                    )
+                    print(f"[수급 날짜별 저장] {archive_path}: {archive_count}건, "
+                          f"{'갱신' if archive_updated else '기존 파일 유지'}")
+                except Exception as archive_exc:
+                    print(f"[수급 날짜별 저장 실패] {archive_exc}")
+                    log(f"★HISTORY_ARCHIVE_{type(archive_exc).__name__}")
 
             await asyncio.sleep(0.1)
 
