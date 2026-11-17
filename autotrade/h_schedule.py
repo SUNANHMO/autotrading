@@ -227,6 +227,9 @@ def check_program_history(token, stock_code="005930", *, persist_live=True):
 			seen_keys.add(next_key)
 			headers["cont-yn"] = "Y"
 			headers["next-key"] = next_key
+			# 장 마감 보관용 전체 이력 조회: 페이지 요청 간 0.5초 대기
+			if not persist_live:
+				time.sleep(0.5)
 
 		if not completed:
 			raise ValueError(f"{max_pages}페이지 내 조회 미완료")
