@@ -3,6 +3,8 @@ import time
 import requests
 import json
 
+from etf_history_archive import archive_program_history
+from etf_strategy import check_signal
 from etf_state import load_state as load_etf_state
 from datetime import datetime, date
 from telegram_log import log
@@ -31,12 +33,18 @@ from f_order import (
 	market_sell,
 	cancel_take_profit,)
 from g_websk import WebSocketClient
+from etf_execution import (
+	start_etf_initial_buy,
+	start_etf_switch,
+	advance_etf_switch,)
 from i_healthcheck import process_check
+from etf_recovery_check import check_etf_recovery
+from etf_step11_diagnostic import diagnose_etf_recovery
+from etf_virtual_strategy import replay_virtual_strategy, plan_virtual_alignment
+from etf_scheduler_diagnostic_step21 import query_and_evaluate_step21
 
 
 ETF_CODES = {"069500", "114800"}
-# 실계좌 주문 활성화는 통합 검증 후 수동 승인
-ETF_LIVE_ORDERS_ENABLED = True
 
 
 async def ensure_websocket(token, websocket):
@@ -127,7 +135,7 @@ def check_program_history(token, stock_code="005930"):
 	"""전체 페이지와 수급 금액을 검증한 뒤에만 과거 데이터를 저장한다."""
 	import os
 	import tempfile
-	from c2_program import parse_amount
+	from etf_recovery import parse_amount
 
 	url = "https://api.kiwoom.com/api/dostk/mrkcond"
 	headers = {
@@ -145,7 +153,7 @@ def check_program_history(token, stock_code="005930"):
 
 	all_rows = []
 	seen_keys = set()
-	seen_keys_rows = set()
+	seen_times = {}
 	duplicate_count = 0
 	completed = False
 	max_pages = 100
@@ -192,13 +200,18 @@ def check_program_history(token, stock_code="005930"):
 				if row.get("stk_cd") not in (None, "", stock_code):
 					raise ValueError(f"{tm} 종목코드 불일치")
 
-				# 동일 시각의 서로 다른 수급 스냅샷도 순서대로 보존한다.
-				# 연속조회 페이지 경계의 완전 중복 행만 제외한다.
-				key = (tm, net, buy_amt, sell_amt)
-				if key in seen_keys_rows:
+				# 키움 연속조회에서 동일 시각의 동일 행이 반복될 수 있다.
+				# 완전히 동일한 행만 제거하고, 같은 시각에 값이 다르면 중단한다.
+				if tm in seen_times:
+					if row != seen_times[tm]:
+						raise ValueError(
+							f"동일 시각 수급 내용 불일치: {tm}, "
+							f"이전={seen_times[tm]}, 현재={row}"
+						)
 					duplicate_count += 1
 					continue
-				seen_keys_rows.add(key)
+
+				seen_times[tm] = row
 				all_rows.append(row)
 			cont_yn = str(response.headers.get("cont-yn", "N")).strip().upper()
 			next_key = str(response.headers.get("next-key", "")).strip()
@@ -221,6 +234,19 @@ def check_program_history(token, stock_code="005930"):
 			raise ValueError("과거 수급 데이터가 비어 있음")
 
 		all_rows.sort(key=lambda row: row["tm"])
+		# 장중 조회 결과는 09:00 부근부터 현재까지 충분히 최신이어야 한다.
+		now = datetime.now()
+		current = now.strftime("%H%M%S")
+		if "090100" <= current < "152000":
+			market_rows = [row for row in all_rows if "090000" <= row["tm"] <= current]
+			if not market_rows or market_rows[0]["tm"] > "090100":
+				raise ValueError("09:00 시작 수급 기록 누락")
+			latest_dt = datetime.strptime(
+				now.strftime("%Y%m%d") + market_rows[-1]["tm"], "%Y%m%d%H%M%S",
+			)
+			age = (now - latest_dt).total_seconds()
+			if not 0 <= age <= 180:
+				raise ValueError(f"과거 수급 최신성 부족: {age:.0f}초")
 		# 검증된 결과만 임시 파일에 기록하고 원자적으로 교체한다.
 		output = os.path.abspath("program_history.json")
 		tmp_path = None
@@ -299,88 +325,87 @@ def read_live_program_flow(now):
 		return None
 
 
-async def notify_etf_virtual_change(websocket, net_amount, old_position, new_position):
-    """신호 당시 호가를 저장하고 동일한 가격을 텔레그램에 보낸다."""
-    if new_position == old_position or new_position not in ("KODEX200", "INVERSE"):
-        return
-    from telegram_log import send_message
-    from etf_state import load_state, save_state
-    codes = {"KODEX200": "069500", "INVERSE": "114800"}
-    quotes = {}
-    for position, code in codes.items():
-        q = websocket.get_etf_quote(code, max_age_seconds=3) if websocket else None
-        quotes[position] = {
-            "bid": int(q.get("best_bid") or 0) if q else 0,
-            "ask": int(q.get("best_ask") or 0) if q else 0,
-        }
-    state = load_state()
-    # 신호가 바뀌어도 이미 접수한 주문의 고정 가격(active_*)은 변경하지 않는다.
-    state["signal_target"] = new_position
-    state["signal_prices"] = quotes
-    save_state(state)
-    def price(position, side):
-        value = quotes[position][side]
-        return f"{value:,}" if value > 0 else "미수신"
-    net_eok = net_amount / 100
-    net_label = f"{net_eok:,.2f}".rstrip("0").rstrip(".") if net_eok % 1 else f"{int(net_eok):,}"
-    parts = [f"(SS) PG_{net_label}"]
-    if old_position in codes:
-        parts.append(f"{'D' if old_position == 'INVERSE' else 'U'}_{price(old_position, 'ask')}")
-    parts.append(f"{'D' if new_position == 'INVERSE' else 'U'}_{price(new_position, 'bid')}")
-    message = " / ".join(parts)
-    print(f"[ETF 가상 방향 텔레그램] {message}")
-    await asyncio.to_thread(send_message, message)
-
-
 async def monitor_etf_signal(now, last_flow_signature, token, websocket):
-    """실시간 가상 포지션은 주문/체결 상태와 관계없이 갱신한다."""
-    if not (MONITOR_START_TIME <= now.strftime("%H:%M:%S") < "15:20:00"):
-        return last_flow_signature
-    flow = read_live_program_flow(now)
-    if flow is None:
-        return last_flow_signature
-    signature = (flow["time"], flow["net_amount"])
-    if signature == last_flow_signature:
-        return last_flow_signature
-    from etf_strategy import update_virtual_position
-    from etf_state import load_state as read_etf_state, save_state as write_etf_state
-    state = read_etf_state()
-    if (state.get("date") == now.strftime("%Y%m%d")
-            and state.get("last_flow_time")
-            and flow["time"] <= state["last_flow_time"]):
-        return signature
-    old_position = state.get("virtual_position", "NONE")
-    target = update_virtual_position(flow["net_amount"], trading_date=now.strftime("%Y%m%d"))
-    if target != old_position:
-        await notify_etf_virtual_change(websocket, flow["net_amount"], old_position, target)
-    state = read_etf_state()
-    state["last_flow_time"] = flow["time"]
-    write_etf_state(state)
-    if target != old_position:
-        print(f"[ETF 가상 방향 변경] {flow['time']} {old_position} -> {target} / 순매수 {flow['net_amount']}")
-    return signature
+	"""
+	새 실시간 수급 데이터가 들어왔을 때 ETF 신호를 판단한다.
+	전환 신호만 주문 실행 모듈로 전달한다.
+	"""
+	if not ("09:00:00" <= now.strftime("%H:%M:%S") < "15:20:00"):
+		return last_flow_signature
 
-def lead_has_priority(lead, etf_state, trading_date, *, search_completed):
-    """주도주 검색 전/매매 중에는 ETF 진입 보류, 전량 매도 완료 시 해제."""
-    if not search_completed:
-        return True
-    if lead.get("holding") or lead.get("buy_order_no"):
-        return True
-    if etf_state.get("lead_sell_completed_date") == trading_date:
-        return False
-    return bool(lead.get("candidate_code"))
+	flow = read_live_program_flow(now)
 
+	if flow is None:
+		return last_flow_signature
+
+	signature = (
+		flow["time"],
+		flow["net_amount"],
+		flow["high_net_amount"],
+		flow["low_net_amount"],)
+
+	if signature == last_flow_signature:
+		return last_flow_signature
+
+	signal = check_signal(
+		flow["net_amount"],
+		flow["high_net_amount"],
+		flow["low_net_amount"],)
+
+	if signal:
+		log(
+			f"ETF_SIGNAL_{signal}_"
+			f"{flow['net_amount']}_{flow['time']}")
+
+		print(
+			"[ETF 신호 감지]",
+			signal,
+			flow["net_amount"],
+			flow["time"],)
+
+		if signal in ("BUY_KODEX200", "BUY_INVERSE"):
+			if not token:
+				log("★ETF_INITIAL_BUY_NO_TOKEN")
+			else:
+				started = await asyncio.to_thread(
+					start_etf_initial_buy,
+					token,
+					signal,
+					websocket,
+				)
+		
+				if started:
+					print(f"ETF_INITIAL_BUY_STARTED_{signal}")
+				else:
+					print(f"ETF_INITIAL_BUY_NOT_STARTED_{signal}")
+		
+		elif signal in ("SWITCH_TO_KODEX200", "SWITCH_TO_INVERSE"):
+			if not token:
+				log("★ETF_SWITCH_NO_TOKEN")
+			else:
+				started = await asyncio.to_thread(
+					start_etf_switch,
+					token,
+					signal,
+					websocket,
+				)
+		
+				if started:
+					print(f"ETF_SWITCH_SELL_STARTED_{signal}")
+				else:
+					print(f"ETF_SWITCH_SELL_NOT_STARTED_{signal}")
+
+	return signature
 
 async def main():
     token = None
     websocket = None
 
-    # 과거 수급 복원 성공 전에는 ETF 실시간 방향 갱신 및 신규 주문 금지
+    # ETF 복구 기능 완성 전에는 자동 주문 차단
     etf_recovery_completed = False
 
     last_date = date.today()
     last_etf_flow_signature = None
-    last_etf_reconcile_at = 0.0  # ETF 계좌 정합성 확인만 최대 1초에 한 번
     executed = {
         "morning_check": False,
         "token": False,
@@ -411,50 +436,21 @@ async def main():
         try:
             now = datetime.now()
             current = now.strftime("%H:%M:%S")
-            # 장중 재시작 시에도 08:30경 당일 최초 기록부터 가상 방향을 복원한다.
-            if (MONITOR_START_TIME <= current < "15:20:00" and token
-                    and not etf_recovery_completed
-                    and time.monotonic() - last_etf_history_attempt >= ETF_HISTORY_RETRY_INTERVAL):
-                last_etf_history_attempt = time.monotonic()
-                rows = await asyncio.to_thread(check_program_history, token)
-                if rows:
-                    try:
-                        from etf_strategy import replay_virtual_history
-                        position, count, flow_tm, net = replay_virtual_history(
-                            rows, trading_date=now.strftime("%Y%m%d"),
-                            cutoff_time=datetime.now().strftime("%H%M%S"),
-                        )
-                        etf_recovery_completed = True
-                        last_etf_flow_signature = (flow_tm, net)
-                        # 재시작 시 과거 변경을 연속 발송하지 않고 현재 방향만 한 번 알림
-                        if position != "NONE":
-                            await notify_etf_virtual_change(websocket, net, "NONE", position)
-                        print(f"[ETF 과거 복원 완료] {count}건 / 마지막 {flow_tm} "
-                              f"/ 순매수 {net} / 가상 포지션 {position}")
-                    except (ValueError, KeyError, TypeError) as exc:
-                        print(f"[ETF 과거 복원 실패] {exc}")
+            # ETF 복구 완료 전에는 ETF 주문 및 신호 판단 차단
             if etf_recovery_completed:
+                if token and "09:00:00" <= current < "15:20:00":
+                    await asyncio.to_thread(
+                        advance_etf_switch,
+                        token,
+                        websocket,
+                    )
+
                 last_etf_flow_signature = await monitor_etf_signal(
-                    now, last_etf_flow_signature, token, websocket,
+                    now,
+                    last_etf_flow_signature,
+                    token,
+                    websocket,
                 )
-            if (ETF_LIVE_ORDERS_ENABLED and token
-                    and time.monotonic() - last_etf_reconcile_at >= 1.0):
-                last_etf_reconcile_at = time.monotonic()
-                from etf_execution import reconcile_etf
-                virtual_target = load_etf_state().get("virtual_position", "NONE")
-                lead = load_state()
-                lead_priority = lead_has_priority(
-                    lead, load_etf_state(), now.strftime("%Y%m%d"),
-                    search_completed=(executed["search"] or current >= "09:00:10"),
-                )
-                if current >= "09:00:10" and not lead.get("holding") and not lead.get("buy_order_no"):
-                    lead_priority = False
-                if (etf_recovery_completed and MONITOR_START_TIME <= current < "15:20:00"):
-                    await asyncio.to_thread(reconcile_etf, token, websocket, virtual_target,
-                                            lead_priority=lead_priority)
-                elif "15:20:00" <= current < "15:30:00":
-                    await asyncio.to_thread(reconcile_etf, token, websocket, virtual_target,
-                                            closing=True)
             if now.date() != last_date:
                 last_date = now.date()
                 token = None
@@ -485,6 +481,123 @@ async def main():
                 asyncio.create_task(websocket.run())
                 executed["websocket_started"] = True
                 print("BACKGROUND WEBSOCKET START REQUESTED")
+
+            # 장중 과거 수급 조회: 실패 또는 오래된 기록이면 완료 처리하지 않는다.
+            # 이 검사는 ETF 주문 차단을 해제하지 않는다.
+            if (
+                token
+                and "09:01:00" <= current < "15:20:00"
+                and not executed["history_test"]
+                and time.monotonic() - last_etf_history_attempt
+                    >= ETF_HISTORY_RETRY_INTERVAL
+            ):
+                last_etf_history_attempt = time.monotonic()
+                history_rows = await asyncio.to_thread(
+                    check_program_history, token, "005930",
+                )
+
+                if history_rows:
+                    market_rows = [
+                        row for row in history_rows
+                        if "090000" <= row["tm"] <= current.replace(":", "")
+                    ]
+                    if market_rows:
+                        first_time = market_rows[0]["tm"]
+                        latest_time = market_rows[-1]["tm"]
+                        latest_dt = datetime.strptime(
+                            now.strftime("%Y%m%d") + latest_time,
+                            "%Y%m%d%H%M%S",
+                        )
+                        age = (now - latest_dt).total_seconds()
+                        if first_time <= "090100" and 0 <= age <= 180:
+                            executed["history_test"] = True
+                            print("ETF 과거 수급 최신성 검사 통과 (주문 차단 유지)")
+                            # 12단계: 검증된 수급 이력으로 주문과 독립된 가상 방향 계산.
+                            # 주문 취소/신규 주문은 실행하지 않는다.
+                            try:
+                                virtual = replay_virtual_strategy(history_rows, now_time=current.replace(":", ""))
+                                print("[ETF 12단계 가상 전략 — 주문 차단 유지] "
+                                      f"방향={virtual['position']}, "
+                                      f"전환횟수={len(virtual['transitions'])}, "
+                                      f"최종시각={virtual['last_time']}")
+                            except Exception as virtual_exc:
+                                print(f"[ETF 가상 전략 검증 실패] {type(virtual_exc).__name__}: {virtual_exc}")
+                                virtual = None
+
+                            # 21단계: 실계좌/미체결과 가상 포지션의 읽기 전용 통합 진단.
+                            # 이 진단은 주문/취소를 호출하지 않고 ETF 자동 주문 차단을 유지한다.
+                            if virtual is not None:
+                                try:
+                                    step21 = await asyncio.to_thread(
+                                        query_and_evaluate_step21,
+                                        token, virtual['position'], current.replace(':', ''),
+                                    )
+                                    print('[ETF 21단계 정합성 진단 — 주문 차단 유지] '
+                                          f"상태={step21['status']}, "
+                                          f"조치={step21['action']}, "
+                                          f"미체결={step21.get('pending_count')}, "
+                                          f"주문허가={step21['can_submit_order']}")
+                                except Exception as diag_exc:
+                                    print(f'[ETF 21단계 진단 보류] {type(diag_exc).__name__}: {diag_exc}')
+
+                            # 6단계: 읽기 전용 계좌 대조. 결과가 승인이라도 주문 차단은 해제하지 않는다.
+                            if not executed["recovery_check_logged"]:
+                                executed["recovery_check_logged"] = True
+                                try:
+                                    recovery_result = await asyncio.to_thread(
+                                        check_etf_recovery, token,
+                                    )
+                                    replay = recovery_result.get("replay") or {}
+                                    print("[ETF 복구 검사]")
+                                    print(f"가상 포지션: {replay.get('position', '조회 불가')}")
+                                    print(f"실제 포지션: {recovery_result.get('account_position')}")
+                                    print(f"실제 보유수량: {recovery_result.get('account_qty')}")
+                                    print(f"ETF 미체결: {recovery_result.get('unfilled_count')}")
+                                    for order_index, order_info in enumerate(recovery_result.get("unfilled_details") or [], 1):
+                                        print(
+                                            f"[ETF 미체결 상세 {order_index}] "
+                                            f"종목={order_info['code']}({order_info['name']}), "
+                                            f"주문번호={order_info['order_no'] or '미제공'}, "
+                                            f"주문수량(원본)={order_info['order_qty_raw'] if order_info['order_qty_raw'] is not None else '미제공'}, "
+                                            f"미체결수량={order_info['remaining_qty']}, "
+                                            f"매수매도구분(원본)={order_info['side_raw'] or '미제공'}, "
+                                            f"거래소(원본)={order_info['market_raw'] or '미제공'}"
+                                        )
+                                    print(f"복구 승인 판정(주문 차단 유지): {recovery_result.get('approved') is True}")
+                                    print(f"사유: {recovery_result.get('reason')}")
+                                    if virtual is not None:
+                                        alignment = plan_virtual_alignment(
+                                            virtual_position=virtual['position'],
+                                            account_position=recovery_result.get('account_position'),
+                                            account_qty=recovery_result.get('account_qty'),
+                                            unfilled_orders=recovery_result.get('unfilled_details'),
+                                            now_time=current.replace(':', ''),
+                                            account_verified=recovery_result.get('account_position') is not None
+                                                and recovery_result.get('account_qty') is not None,
+                                            orders_verified=isinstance(recovery_result.get('unfilled_details'), list)
+                                                and recovery_result.get('unfilled_count') == len(recovery_result.get('unfilled_details')),
+                                        )
+                                        print(f"[ETF 12단계 정합성 판단 — 실행 안 함] {alignment}")
+                                    # 11단계: 실제 주문 없이 8~10단계 진단 연결.
+                                    try:
+                                        step11 = await asyncio.to_thread(
+                                            diagnose_etf_recovery, recovery_result,
+                                        )
+                                        print("[ETF 11단계 통합 진단 — 주문 차단 유지]")
+                                        print(f"상태: {step11['status']}")
+                                        print(f"계좌 정합성: {(step11.get('reconciliation') or {}).get('alignment')}")
+                                        print(f"다음 검증: {step11['next_check']}")
+                                        print(f"사유: {step11['reason']}")
+                                    except Exception as diag_exc:
+                                        print(f"[ETF 11단계 진단 보류] {type(diag_exc).__name__}: {diag_exc}")
+                                except Exception as recovery_exc:
+                                    log(f"★ETF_RECOVERY_CHECK_{type(recovery_exc).__name__}")
+                                    print(f"[ETF 복구 검사 실패] {type(recovery_exc).__name__}: {recovery_exc}")
+                        else:
+                            log("★ETF_HISTORY_STALE_OR_INCOMPLETE")
+                            print(f"[ETF 과거 수급 미완료] 최초={first_time}, 최신={latest_time}, 지연={age:.0f}초")
+                    else:
+                        log("★ETF_HISTORY_NO_MARKET_ROWS")
 
             # 06:55 시스템 점검
             if (
@@ -788,6 +901,35 @@ async def main():
                 and not executed["cancel_tp"]
             ):
                 executed["cancel_tp"] = True
+
+                # 장 마감 수급 이력: 계좌조회/주문 처리와 독립적으로 실패를 격리한다.
+                # 기존 조회 함수의 전체 페이지/금액 검증을 통과한 행만 날짜별로 보관한다.
+                try:
+                    if token is None:
+                        token = await asyncio.to_thread(get_token)
+                    if not token:
+                        raise ValueError("수급 저장용 토큰 없음")
+                    closing_rows = await asyncio.to_thread(
+                        check_program_history, token, "005930",
+                    )
+                    if not closing_rows:
+                        raise ValueError("장 마감 수급 이력 조회/검증 실패")
+                    # 14시대에 끊긴 과거 이력을 완전한 장 마감 자료로 저장하지 않는다.
+                    latest_market_time = max(
+                        (row["tm"] for row in closing_rows if "090000" <= row["tm"] <= "153100"),
+                        default="000000",
+                    )
+                    if latest_market_time < "151900":
+                        raise ValueError(f"장 마감 수급 기록 부족: 마지막 {latest_market_time}")
+                    archive_path, archive_count, archive_updated = await asyncio.to_thread(
+                        archive_program_history, closing_rows,
+                        trading_date=now.strftime("%Y%m%d"),
+                    )
+                    print(f"[수급 날짜별 저장] {archive_path}: {archive_count}건, "
+                          f"{'갱신' if archive_updated else '기존 파일 유지'}")
+                except Exception as archive_exc:
+                    print(f"[수급 날짜별 저장 실패] {archive_exc}")
+                    log(f"★HISTORY_ARCHIVE_{type(archive_exc).__name__}")
 
                 token, websocket = await ensure_websocket(
                     token,
