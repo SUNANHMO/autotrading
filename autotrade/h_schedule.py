@@ -4,6 +4,7 @@ import requests
 import json
 
 from etf_history_archive import archive_program_history
+from etf_live_scheduler import EtfLiveScheduler
 from datetime import datetime, date
 from telegram_log import log
 from a_config import (
@@ -268,7 +269,8 @@ async def main():
     token = None
     websocket = None
 
-    # ETF 자동 주문은 이 스케줄러에서 비활성화한다.
+    # ETF 장중 신호 및 주문은 별도 모듈이 관리한다.
+    etf_live = EtfLiveScheduler()
 
     last_date = date.today()
     executed = {
@@ -305,6 +307,7 @@ async def main():
                 last_date = now.date()
                 token = None
                 last_etf_history_attempt = 0.0
+                etf_live.reset_day()
                 
                 for key in executed:
                     executed[key] = False
@@ -334,7 +337,7 @@ async def main():
             # 이 검사는 ETF 주문 차단을 해제하지 않는다.
             if (
                 token
-                and "09:01:00" <= current < "15:20:00"
+                and MONITOR_START_TIME <= current < "15:20:00"
                 and not executed["history_test"]
                 and time.monotonic() - last_etf_history_attempt
                     >= ETF_HISTORY_RETRY_INTERVAL
@@ -345,28 +348,38 @@ async def main():
                 )
 
                 if history_rows:
-                    market_rows = [
+                    # 08:59:55부터 08:30 이후의 당일 기록으로 기준점을 복원한다.
+                    # 장 시작 전에는 09:00 이후 기록이 아직 없어도 정상이다.
+                    available_rows = [
                         row for row in history_rows
-                        if "090000" <= row["tm"] <= current.replace(":", "")
+                        if "083000" <= row["tm"] <= current.replace(":", "")
                     ]
-                    if market_rows:
-                        first_time = market_rows[0]["tm"]
-                        latest_time = market_rows[-1]["tm"]
+                    if available_rows:
+                        first_time = available_rows[0]["tm"]
+                        latest_time = available_rows[-1]["tm"]
                         latest_dt = datetime.strptime(
                             now.strftime("%Y%m%d") + latest_time,
                             "%Y%m%d%H%M%S",
                         )
                         age = (now - latest_dt).total_seconds()
-                        if first_time <= "090100" and 0 <= age <= 180:
+                        if first_time <= "085955" and 0 <= age <= 180:
                             executed["history_test"] = True
-                            print("ETF 과거 수급 최신성 검사 통과 (주문 차단 유지)")
-                            # 과거 진단 모듈 호출은 제거했다.
-                            # 수급 이력 검증만 수행하며 ETF 주문은 하지 않는다.
+                            print("ETF 과거 수급 최신성 검사 통과")
+                            etf_live.initialize(history_rows, now)
                         else:
                             log("★ETF_HISTORY_STALE_OR_INCOMPLETE")
                             print(f"[ETF 과거 수급 미완료] 최초={first_time}, 최신={latest_time}, 지연={age:.0f}초")
                     else:
                         log("★ETF_HISTORY_NO_MARKET_ROWS")
+
+            # ETF 감시 준비는 MONITOR_START_TIME부터, 실제 주문은 09:00 이후.
+            # 미체결 대기/호가 고정/주도주 우선 로직은 그대로 유지한다.
+            if token and executed["history_test"] and "09:00:00" <= current < "15:20:00":
+                await etf_live.tick(token, websocket, now)
+
+            # 15:20 이후 ETF 지정가 주문 정리 및 시장가 청산
+            if token and "15:20:00" <= current < "15:31:00":
+                await etf_live.close(token, websocket)
 
             # 06:55 시스템 점검
             if (

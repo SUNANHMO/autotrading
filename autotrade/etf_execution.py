@@ -12,13 +12,13 @@ from etf_state import load_state, save_state
 CODES = {"KODEX200": "069500", "INVERSE": "114800"}
 
 
-def _account_qty(token):
+def _account_qty(token, *, closing=False):
     account = get_account(token)
     if not isinstance(account, dict) or not isinstance(account.get("stk_acnt_evlt_prst"), list):
         return None
     holdings = _parse_holdings(account)
     # 재시작 직후 주도주 상태 파일이 비어 있어도 실제 주도주 보유를 우선한다.
-    if any(h["code"] not in CODES.values() for h in holdings):
+    if not closing and any(h["code"] not in CODES.values() for h in holdings):
         return "LEAD_HOLDING"
     return {code: next((h["qty"] for h in holdings if h["code"] == code), 0)
             for code in CODES.values()}
@@ -62,7 +62,7 @@ def reconcile_etf(token, websocket, target, *, lead_priority=False, closing=Fals
     if target not in ("NONE", *CODES):
         return "INVALID_TARGET"
     state = load_state()
-    qty = _account_qty(token)
+    qty = _account_qty(token, closing=closing)
     orders = get_etf_unfilled_orders(token)
     if qty is None or orders is None:
         return "WAIT_ACCOUNT"
