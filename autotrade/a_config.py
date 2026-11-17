@@ -21,7 +21,6 @@ STOP_LOSS_RATE = -0.04	# (손절) -4%, 부호는 무시됨(abs 사용)
 
 TELEGRAM_TOKEN = "8932924634:AAESjWOelv4d8Leotu4eIycKH1hWAEVWPL0"
 TELEGRAM_CHAT_ID = "7887391551"
-GIT = "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"
 
 TEST_DATE = None # 테스트 날짜 : 운영 시 None 사용
 
