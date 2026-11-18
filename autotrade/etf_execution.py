@@ -34,29 +34,6 @@ def _quote(websocket, code):
     return (bid, ask) if bid > 0 and ask > 0 else None
 
 
-def _closing_order_kind(order):
-    """미체결 원문에서 매도 시장가 여부를 보수적으로 판정한다.
-
-    시장가 여부를 확정할 수 없으면 취소하지 않는다(실계좌 보호).
-    """
-    side = str(order.get("io_tp_nm") or order.get("io_tp") or "").strip()
-    if "매수" in side or side in ("+", "2"):
-        return "OTHER"
-    if "매도" not in side and side not in ("-", "1"):
-        return "UNKNOWN"
-
-    for field in ("ord_tp_nm", "trde_tp_nm", "ord_tp", "trde_tp"):
-        value = str(order.get(field) or "").strip()
-        if not value:
-            continue
-        if "시장가" in value or (field == "trde_tp" and value == "3"):
-            return "MARKET_SELL"
-        if "지정가" in value or "보통" in value or (field == "trde_tp" and value == "0"):
-            return "OTHER"
-    # 주문 종류를 알 수 없는 매도는 시장가일 가능성이 있어 보호한다.
-    return "UNKNOWN"
-
-
 def reconcile_etf(token, websocket, target, *, lead_priority=False, closing=False):
     """한 번 호출할 때 최대 한 건의 신규 주문/취소 요청만 실행한다."""
     if target not in ("NONE", *CODES):
@@ -74,49 +51,54 @@ def reconcile_etf(token, websocket, target, *, lead_priority=False, closing=Fals
         return "LEAD_PRIORITY"
     if qty == "LEAD_HOLDING":
         return "WAIT_LEAD_HOLDING"
-    # 장중에는 미체결 주문을 취소하거나 정정하지 않는다. 신호가 바뀌어도 대기.
-    if orders:
-        if not closing:
-            return "WAIT_FILL"
-        # 재시작 후 상태 파일이 없어도 시장가 매도를 취소하지 않는다.
-        # 취소 가능한 기존 지정가 주문만 취소하고, 시장가/판정불가 매도는 보호한다.
-        closing_no = str(state.get("closing_order_no") or "")
-        if closing_no and any(str(o.get("ord_no") or "") == closing_no for o in orders):
-            return "WAIT_CLOSING_FILL"
-        if state.get("cancel_requested"):
-            return "WAIT_CANCEL"
-        for order in orders:
-            kind = _closing_order_kind(order)
-            if kind != "OTHER":
-                print(f"[ETF 마감 주문 보호] kind={kind}, order_no={order.get('ord_no')}, raw={order}")
-                return "WAIT_CLOSING_ORDER"
-            code = str(order.get("stk_cd", "")).removeprefix("A").strip()
-            number = order.get("ord_no")
-            if not number:
-                return "WAIT_ORDER_NUMBER"
-            result = etf_cancel_order(token, code, number)
-            if result is None:
-                return "WAIT_CANCEL_REQUEST"
-            state.update(cancel_requested=True, pending_order_no=str(number))
-            save_state(state)
-            return "CANCEL_REQUESTED"
-    if state.get("cancel_requested"):
-        state.update(cancel_requested=False, pending_order_no=None)
-        save_state(state)
-        return "RECHECK_AFTER_CANCEL"
+    # 15:20 이후: 모든 ETF 미체결 주문의 취소 완료를 확인한 뒤 시장가 청산한다.
+    # 한 번의 호출에서 주문 요청은 최대 한 건만 실행한다.
     if closing:
-        # 장마감에는 장중 고정가격 계획을 폐기하고 기존 시장가 청산을 수행한다.
+        # 장중 전환 계획은 마감 시 폐기한다.
         if state.get("active_stage"):
             state.update(active_target=None, active_sell_code=None,
                          active_sell_price=None, active_buy_price=None, active_stage=None)
             save_state(state)
-        if state.get("closing_order_no"):
-            closing_code = state.get("closing_code")
-            if closing_code and qty.get(closing_code, 0) == 0:
-                state.update(closing_order_no=None, closing_code=None)
-                save_state(state)
-            else:
+
+        if orders:
+            # 이번 청산 단계에서 직접 제출한 시장가 매도는 중복 취소/재주문하지 않는다.
+            closing_no = str(state.get("closing_order_no") or "")
+            if closing_no and any(str(o.get("ord_no") or "") == closing_no for o in orders):
                 return "WAIT_CLOSING_FILL"
+            pending_no = str(state.get("pending_order_no") or "")
+            if state.get("cancel_requested") and pending_no:
+                if any(str(o.get("ord_no") or "") == pending_no for o in orders):
+                    return "WAIT_CANCEL"
+                # 취소 대상 주문이 미체결 목록에서 사라졌음: 다음 주문을 처리한다.
+                state.update(cancel_requested=False, pending_order_no=None)
+                save_state(state)
+                return "RECHECK_AFTER_CANCEL"
+            elif state.get("cancel_requested"):
+                state.update(cancel_requested=False, pending_order_no=None)
+                save_state(state)
+
+            for order in orders:
+                code = str(order.get("stk_cd") or "").removeprefix("A").strip()
+                number = str(order.get("ord_no") or "").strip()
+                if code not in CODES.values() or not number:
+                    # 알 수 없는 주문은 임의로 취소하거나 건너뛰지 않는다.
+                    return "WAIT_ORDER_DETAILS"
+                result = etf_cancel_order(token, code, number)
+                if result is None:
+                    return "WAIT_CANCEL_REQUEST"
+                state.update(cancel_requested=True, pending_order_no=number)
+                save_state(state)
+                return "CANCEL_REQUESTED"
+
+        # 미체결 목록이 비어 있으면 과거 주문번호 때문에 청산을 막지 않는다.
+        if state.get("cancel_requested") or state.get("pending_order_no"):
+            state.update(cancel_requested=False, pending_order_no=None)
+            save_state(state)
+            return "RECHECK_AFTER_CANCEL"
+        if state.get("closing_order_no") or state.get("closing_code"):
+            state.update(closing_order_no=None, closing_code=None)
+            save_state(state)
+
         for code, held in qty.items():
             if held > 0:
                 number = etf_market_sell(token, code, held)
@@ -125,6 +107,14 @@ def reconcile_etf(token, websocket, target, *, lead_priority=False, closing=Fals
                     save_state(state)
                 return "CLOSING_SELL_SUBMITTED" if number else "CLOSING_SELL_FAILED"
         return "CLOSING_FLAT"
+
+    # 장중에는 기존대로 미체결을 기다리며 주문을 취소하지 않는다.
+    if orders:
+        return "WAIT_FILL"
+    if state.get("cancel_requested"):
+        state.update(cancel_requested=False, pending_order_no=None)
+        save_state(state)
+        return "RECHECK_AFTER_CANCEL"
 
     # 이미 시작한 전환은 최초 신호 가격으로 끝낸다.
     stage = state.get("active_stage")
