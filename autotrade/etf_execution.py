@@ -67,6 +67,10 @@ def reconcile_etf(token, websocket, target, *, lead_priority=False, closing=Fals
     if qty is None or orders is None:
         return "WAIT_ACCOUNT"
     if qty == "LEAD_HOLDING" and not closing:
+        # 주도주 보유를 확인한 경우, 이후 전량 매도 시 ETF 재진입을 허용한다.
+        if not state.get("etf_waiting_for_lead_exit"):
+            state["etf_waiting_for_lead_exit"] = True
+            save_state(state)
         return "LEAD_PRIORITY"
     if qty == "LEAD_HOLDING":
         return "WAIT_LEAD_HOLDING"
@@ -155,8 +159,32 @@ def reconcile_etf(token, websocket, target, *, lead_priority=False, closing=Fals
         return "LEAD_PRIORITY" if lead_priority else "NO_SIGNAL"
     desired = CODES[target]
     if qty[desired] > 0 and all(qty[c] == 0 for c in CODES.values() if c != desired):
+        if state.get("etf_waiting_for_lead_exit"):
+            state["etf_waiting_for_lead_exit"] = False
+            save_state(state)
         return "ALIGNED"
-    # 신호 발생 당시 텔레그램에 기록된 호가만 사용한다.
+
+    # 주도주 보유를 관측한 뒤 매도가 완료되어 ETF 잔고가 없는 경우에만,
+    # 과거 신호 가격 대신 현재 웹소켓의 최신 최우선 매수호가를 사용한다.
+    # 미체결/계좌 오류/주도주 우선 상태는 위에서 이미 차단한다.
+    if (state.get("etf_waiting_for_lead_exit")
+            and all(held == 0 for held in qty.values())):
+        quote = _quote(websocket, desired)
+        if quote is None:
+            return "WAIT_LEAD_EXIT_QUOTE"
+        buy_price = quote[0]
+        buy_qty = get_etf_buy_qty(token, desired, buy_price)
+        if buy_qty <= 0:
+            return "WAIT_BUY_POWER"
+        number = etf_buy(token, desired, buy_qty, buy_price)
+        if number:
+            state.update(active_target=target, active_sell_code=None,
+                         active_sell_price=None, active_buy_price=buy_price,
+                         active_stage="BUY", etf_waiting_for_lead_exit=False)
+            save_state(state)
+        return "BUY_SUBMITTED" if number else "BUY_FAILED"
+
+    # 일반 ETF 전환/최초 진입은 기존 신호 당시 가격을 그대로 사용한다.
     prices = state.get("signal_prices") or {}
     if state.get("signal_target") != target:
         return "WAIT_SIGNAL_PRICE"
