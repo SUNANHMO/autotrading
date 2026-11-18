@@ -19,6 +19,9 @@ from a_config import (
 	AFTERNOON_CHECK_TIME,
 	BUY_CHECK_TIME,
 	CANCEL_TAKE_PROFIT_TIME,
+	MONITOR_END_TIME,
+	shift_time,
+	relative_time,
 	)
 from b_auth import get_token
 from c0_buy_selector import get_buy_code
@@ -170,7 +173,7 @@ def check_program_history(token, stock_code="005930", *, persist_live=True):
 				tm = str(row.get("tm", "")).strip()
 				# 보관용 조회는 전체 페이지를 요청하되 저장 범위 밖 행은 제외한다.
 				# 실시간 전략의 엄격한 검증 방식은 변경하지 않는다.
-				if not persist_live and len(tm) == 6 and tm.isdigit() and not ("083000" <= tm <= "153100"):
+				if not persist_live and len(tm) == 6 and tm.isdigit() and not (KRX_TAKE_PROFIT_TIME.replace(":", "") <= tm <= CANCEL_TAKE_PROFIT_TIME.replace(":", "")):
 					continue
 				if len(tm) != 6 or not tm.isdigit():
 					raise ValueError(f"잘못된 수급 시간: {tm!r}")
@@ -242,10 +245,10 @@ def check_program_history(token, stock_code="005930", *, persist_live=True):
 		# 장중 조회 결과는 09:00 부근부터 현재까지 충분히 최신이어야 한다.
 		now = datetime.now()
 		current = now.strftime("%H%M%S")
-		if "090100" <= current < "152000":
-			market_rows = [row for row in all_rows if "090000" <= row["tm"] <= current]
-			if not market_rows or market_rows[0]["tm"] > "090100":
-				raise ValueError("09:00 시작 수급 기록 누락")
+		if relative_time(MONITOR_START_TIME, 65, compact=True) <= current < MONITOR_END_TIME.replace(":", ""):
+			market_rows = [row for row in all_rows if relative_time(MONITOR_START_TIME, 5, compact=True) <= row["tm"] <= current]
+			if not market_rows or market_rows[0]["tm"] > relative_time(MONITOR_START_TIME, 65, compact=True):
+				raise ValueError(f"{relative_time(MONITOR_START_TIME, 5)} 시작 수급 기록 누락")
 			latest_dt = datetime.strptime(
 				now.strftime("%Y%m%d") + market_rows[-1]["tm"], "%Y%m%d%H%M%S",
 			)
@@ -355,7 +358,7 @@ async def main():
             # 이 검사는 ETF 주문 차단을 해제하지 않는다.
             if (
                 token
-                and MONITOR_START_TIME <= current < "15:20:00"
+                and MONITOR_START_TIME <= current < MONITOR_END_TIME
                 and not executed["history_test"]
                 and time.monotonic() - last_etf_history_attempt
                     >= ETF_HISTORY_RETRY_INTERVAL
@@ -370,7 +373,7 @@ async def main():
                     # 장 시작 전에는 09:00 이후 기록이 아직 없어도 정상이다.
                     available_rows = [
                         row for row in history_rows
-                        if "083000" <= row["tm"] <= current.replace(":", "")
+                        if KRX_TAKE_PROFIT_TIME.replace(":", "") <= row["tm"] <= current.replace(":", "")
                     ]
                     if available_rows:
                         first_time = available_rows[0]["tm"]
@@ -380,7 +383,7 @@ async def main():
                             "%Y%m%d%H%M%S",
                         )
                         age = (now - latest_dt).total_seconds()
-                        if first_time <= "085955" and 0 <= age <= 180:
+                        if first_time <= MONITOR_START_TIME.replace(":", "") and 0 <= age <= 180:
                             executed["history_test"] = True
                             print("ETF 과거 수급 최신성 검사 통과")
                             etf_live.initialize(history_rows, now)
@@ -392,11 +395,11 @@ async def main():
 
             # ETF 감시 준비는 MONITOR_START_TIME부터, 실제 주문은 09:00 이후.
             # 미체결 대기/호가 고정/주도주 우선 로직은 그대로 유지한다.
-            if token and executed["history_test"] and "09:00:00" <= current < "15:20:00":
+            if token and executed["history_test"] and relative_time(MONITOR_START_TIME, 5) <= current < MONITOR_END_TIME:
                 await etf_live.tick(token, websocket, now)
 
             # 15:20 이후 ETF 지정가 주문 정리 및 시장가 청산
-            if token and "15:20:00" <= current < "15:31:00":
+            if token and MONITOR_END_TIME <= current < CANCEL_TAKE_PROFIT_TIME:
                 await etf_live.close(token, websocket)
 
             # 06:55 시스템 점검
@@ -549,7 +552,7 @@ async def main():
 
             # 08:59:55 실시간 감시 준비
             if (
-                MONITOR_START_TIME <= current < "09:00:10"
+                MONITOR_START_TIME <= current < relative_time(MONITOR_START_TIME, 15)
                 and not executed["monitor"]
             ):
                 executed["monitor"] = True
@@ -581,7 +584,7 @@ async def main():
 
             # 08:59:55 신규 매수 주문
             if (
-                BUY_TIME <= current < "09:00:10"
+                BUY_TIME <= current < relative_time(MONITOR_START_TIME, 15)
                 and not executed["buy"]
             ):
                 executed["buy"] = True
@@ -663,7 +666,7 @@ async def main():
 
             # 15:25 기존 보유분 강제 매도
             if (
-                FORCE_SELL_TIME <= current < "15:26:00"
+                FORCE_SELL_TIME <= current < relative_time(FORCE_SELL_TIME, 60)
                 and not executed["force_sell"]
             ):
                 executed["force_sell"] = True
@@ -684,7 +687,7 @@ async def main():
 
             # 당일 매수 점검
             if (
-                BUY_CHECK_TIME <= current < "08:56:00"
+                BUY_CHECK_TIME <= current < relative_time(BUY_CHECK_TIME, 60)
                 and not executed["buy_check"]
             ):
                 executed["buy_check"] = True
@@ -697,7 +700,7 @@ async def main():
 
             # 15:31 하루 마감 처리
             if (
-                CANCEL_TAKE_PROFIT_TIME <= current < "15:32:00"
+                CANCEL_TAKE_PROFIT_TIME <= current < relative_time(CANCEL_TAKE_PROFIT_TIME, 60)
                 and not executed["cancel_tp"]
             ):
                 executed["cancel_tp"] = True

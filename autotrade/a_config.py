@@ -24,21 +24,37 @@ TELEGRAM_CHAT_ID = "7887391551"
 
 TEST_DATE = None # 테스트 날짜 : 운영 시 None 사용
 
+# 거래소 일정 지연(평소 00:00:00, 수능일 01:00:00)
+PLUS_TIME = "00:00:00"
+
+from datetime import datetime, timedelta
+
+def shift_time(base, seconds=0, *, compact=False):
+    """기준 시각 + 상대 초 + PLUS_TIME. 문자열 HH:MM:SS 또는 HHMMSS 반환."""
+    offset = sum(int(x) * unit for x, unit in zip(PLUS_TIME.split(":"), (3600, 60, 1)))
+    dt = datetime.strptime(base, "%H:%M:%S") + timedelta(seconds=seconds + offset)
+    return dt.strftime("%H%M%S" if compact else "%H:%M:%S")
+
+def relative_time(adjusted_base, seconds=0, *, compact=False):
+    """이미 PLUS_TIME이 적용된 설정 시각에 상대 초만 더한다."""
+    dt = datetime.strptime(adjusted_base, "%H:%M:%S") + timedelta(seconds=seconds)
+    return dt.strftime("%H%M%S" if compact else "%H:%M:%S")
+
 # 스케줄 시간
-TOKEN_TIME = "07:00:00"
-SEARCH_TIME = "07:30:00"
-NXT_TAKE_PROFIT_TIME = "08:00:00"
-KRX_TAKE_PROFIT_TIME = "08:30:00"
-BUY_TIME = "08:59:55"
-MONITOR_START_TIME = "08:59:55"
-FORCE_SELL_TIME = "15:25:00"
-MONITOR_END_TIME = "15:20:00"
-CANCEL_TAKE_PROFIT_TIME = "15:31:00" #"15:31:00"
+TOKEN_TIME = shift_time("07:00:00")
+SEARCH_TIME = shift_time("07:30:00")
+NXT_TAKE_PROFIT_TIME = shift_time("08:00:00")
+KRX_TAKE_PROFIT_TIME = shift_time("08:30:00")
+BUY_TIME = shift_time("08:59:55")
+MONITOR_START_TIME = shift_time("08:59:55")
+FORCE_SELL_TIME = shift_time("15:25:00")
+MONITOR_END_TIME = shift_time("15:20:00")
+CANCEL_TAKE_PROFIT_TIME = shift_time("15:31:00") #"15:31:00"
 
 #Health체크타임
-MORNING_CHECK_TIME = "06:55:00"
-BUY_CHECK_TIME = "08:55:00"
-AFTERNOON_CHECK_TIME = "15:20:05"
+MORNING_CHECK_TIME = shift_time("06:55:00")
+BUY_CHECK_TIME = shift_time("08:55:00")
+AFTERNOON_CHECK_TIME = shift_time("15:20:05")
 
 # 전환 기준: 200억 원 (단위: 백만 원)
 REVERSE_AMOUNT = 0.2

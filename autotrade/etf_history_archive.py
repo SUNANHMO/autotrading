@@ -4,6 +4,7 @@ import os
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from a_config import KRX_TAKE_PROFIT_TIME, CANCEL_TAKE_PROFIT_TIME
 
 
 def archive_program_history(rows, *, trading_date=None, directory=None):
@@ -22,7 +23,7 @@ def archive_program_history(rows, *, trading_date=None, directory=None):
         if len(tm) != 6 or not tm.isdigit():
             raise ValueError(f"시간 형식 오류: {tm}")
         datetime.strptime(tm, "%H%M%S")
-        if not ("083000" <= tm <= "153100"):
+        if not (KRX_TAKE_PROFIT_TIME.replace(":", "") <= tm <= CANCEL_TAKE_PROFIT_TIME.replace(":", "")):
             continue
         # 검증된 원본 값의 단위(백만원)를 유지한다.
         raw = str(row["prm_netprps_amt"]).replace(",", "").replace("--", "-")
@@ -34,7 +35,7 @@ def archive_program_history(rows, *, trading_date=None, directory=None):
         for tm, net in sorted(seen.items())
     ]
     if not simplified:
-        raise ValueError("08:30~15:31 범위의 수급 기록이 없습니다")
+        raise ValueError(f"{KRX_TAKE_PROFIT_TIME}~{CANCEL_TAKE_PROFIT_TIME} 범위의 수급 기록이 없습니다")
     # 기존 날짜 파일이 더 늦은 시각 또는 더 많은 기록을 담으면 덮어쓰지 않는다.
     if output.exists():
         with output.open(encoding="utf-8") as f:
