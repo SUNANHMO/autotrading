@@ -25,7 +25,7 @@ TELEGRAM_CHAT_ID = "7887391551"
 TEST_DATE = None # 테스트 날짜 : 운영 시 None 사용
 
 # 거래소 일정 지연(평소 00:00:00, 수능일 01:00:00)
-PLUS_TIME = "00:00:00"
+PLUS_TIME = "01:00:00"
 
 from datetime import datetime, timedelta
 
