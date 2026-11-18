@@ -66,13 +66,14 @@ async def ensure_websocket(token, websocket):
 	return token, None
 
 
-def sync_account_state(token, origin="existing"):
+def sync_account_state(token, origin="existing", summary=None):
 	"""
 	실제 계좌 잔고를 기준으로 주도주 상태만 동기화한다.
 	ETF 보유는 e_state.json에 기록하지 않는다.
 	"""
 
-	summary = get_account_summary(token)
+	if summary is None:
+		summary = get_account_summary(token)
 
 	if summary.get("cash") is None:
 		log("★ACCOUNT")
@@ -453,6 +454,7 @@ async def main():
                             sync_account_state(
                                 token,
                                 "existing",
+                                summary=summary,
                             )
 
                             if summary.get("etf_holding"):
@@ -493,6 +495,7 @@ async def main():
                             sync_account_state(
                                 token,
                                 "existing",
+                                summary=summary,
                             )
 
                             state = load_state()
