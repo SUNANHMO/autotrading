@@ -62,14 +62,22 @@ def replay_virtual_history(rows, *, trading_date, cutoff_time):
         raise ValueError("재생할 당일 프로그램 수급 기록 없음")
     position, day_high, day_low, high, low = "NONE", None, None, None, None
     last_time, last_net = None, None
+    transitions = []
     for row in selected:
         net = parse_amount(str(row["prm_netprps_amt"]))
         buy = parse_amount(str(row["prm_buy_amt"]))
         sell = parse_amount(str(row["prm_sell_amt"]))
         if net != buy - sell:
             raise ValueError(f"{row['tm']} 순매수 금액 불일치")
+        previous = position
         position, day_high, day_low, high, low = _advance(
             position, net, day_high, day_low, high, low)
+        if position != previous:
+            tm = str(row["tm"]).zfill(6)
+            clock = f"{tm[:2]}:{tm[2:4]}:{tm[4:6]}"
+            action = (f"{position} 최초 진입" if previous == "NONE"
+                      else f"{previous} → {position}")
+            transitions.append((clock, action, net))
         last_time, last_net = str(row["tm"]), net
     state = load_state()
     state.update(date=trading_date, virtual_position=position,
@@ -77,4 +85,11 @@ def replay_virtual_history(rows, *, trading_date, cutoff_time):
                  virtual_high=high, virtual_low=low,
                  last_flow_time=last_time, current_net_amount=last_net)
     save_state(state)
+    print("[ETF 20% 과거 가상 전환 이력 — 실제 주문 아님]")
+    if transitions:
+        for clock, action, net in transitions:
+            print(f"  {clock}  {action}  순매수={net}백만원")
+    else:
+        print("  과거 구간 내 진입·전환 신호 없음")
+    print(f"  현재 가상 방향: {position} / 전환 {max(0, len(transitions) - 1)}회")
     return position, len(selected), last_time, last_net
