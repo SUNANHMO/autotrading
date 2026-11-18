@@ -678,7 +678,7 @@ def get_etf_unfilled_orders(token):
                 )
 
         if all_orders:
-            print(f"[ETF 미체결 조회 완료] {len(all_orders)}건")
+            pass #print(f"[ETF 미체결 조회 완료] {len(all_orders)}건")
         return all_orders
 
     except Exception as e:
