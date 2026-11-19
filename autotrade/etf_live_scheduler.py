@@ -81,7 +81,19 @@ class EtfLiveScheduler:
                     # 신호 시점 호가가 없다면 신호는 기록하되 주문하지 않는다.
                     state["signal_target"] = target if quotes else None
                     state["signal_prices"] = quotes or {}
-                    log(f"PG_{target}_{net}_{tm}")
+                    # 전환 전 ETF의 매도 1호가 / 전환 후 ETF의 매수 1호가를 알린다.
+                    symbols = {"KODEX200": "U", "INVERSE": "D", "NONE": "N"}
+                    direction = f"{symbols.get(previous, previous)}>{symbols.get(target, target)}"
+                    clock = f"{tm[:2]}:{tm[2:4]}:{tm[4:6]}"
+                    parts = [clock, direction]
+                    if quotes:
+                        if previous in ("KODEX200", "INVERSE"):
+                            parts.append(f"{symbols[previous]}_{quotes[previous]['ask']:,}")
+                        if target in ("KODEX200", "INVERSE"):
+                            parts.append(f"{symbols[target]}_{quotes[target]['bid']:,}")
+                    else:
+                        parts.append("호가없음")
+                    log(" / ".join(parts))
                     print(f"[ETF 전환 신호] {previous} -> {target}, {tm}, {net}, 호가={'확보' if quotes else '없음'}")
                 save_state(state)
 
