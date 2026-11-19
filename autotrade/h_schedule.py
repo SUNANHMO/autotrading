@@ -8,6 +8,7 @@ from etf_live_scheduler import EtfLiveScheduler
 from datetime import datetime, date
 from telegram_log import log
 from a_config import (
+    LEAD_TRADING_ENABLED,
 	TOKEN_TIME,
 	NXT_TAKE_PROFIT_TIME,
 	KRX_TAKE_PROFIT_TIME,
@@ -592,55 +593,58 @@ async def main():
             ):
                 executed["buy"] = True
 
-                token, websocket = await ensure_websocket(
-                    token,
-                    websocket,
-                )
-
-                if websocket is None:
-                    log("★WEBSK_BUY")
-
+                if not LEAD_TRADING_ENABLED:
+                    log("SKIP_LEAD_DISABLED_BUY")
                 else:
-                    state = load_state()
-                    summary = get_account_summary(token)
+                    token, websocket = await ensure_websocket(
+                        token,
+                        websocket,
+                    )
 
-                    if summary.get("cash") is None:
-                        log("★ACCOUNT_BUY")
-
-                    elif summary.get("has_holding"):
-                        log("SKIP_BUY_HOLDING")
-
-                    elif not state.get("candidate_code"):
-                        log("No_B")
-
-                    elif state.get("buy_order_no"):
-                        log("SKIP_BUY_ORDER_EXISTS")
+                    if websocket is None:
+                        log("★WEBSK_BUY")
 
                     else:
-                        expected_price = websocket.price_data.get(
-                            "expected_price",
-                            0,
-                        )
+                        state = load_state()
+                        summary = get_account_summary(token)
 
-                        if expected_price <= 0:
-                            log("★EXPECTED_PRICE")
+                        if summary.get("cash") is None:
+                            log("★ACCOUNT_BUY")
+
+                        elif summary.get("has_holding"):
+                            log("SKIP_BUY_HOLDING")
+
+                        elif not state.get("candidate_code"):
+                            log("No_B")
+
+                        elif state.get("buy_order_no"):
+                            log("SKIP_BUY_ORDER_EXISTS")
 
                         else:
-                            buy_price = get_upper_price(
-                                expected_price * 1.01
+                            expected_price = websocket.price_data.get(
+                                "expected_price",
+                                0,
                             )
 
-                            order_no = buy(
-                                token,
-                                state["candidate_code"],
-                                buy_price,
-                            )
+                            if expected_price <= 0:
+                                log("★EXPECTED_PRICE")
 
-                            log(
-                                f"O_{order_no}"
-                                if order_no
-                                else "★ORDER"
-                            )
+                            else:
+                                buy_price = get_upper_price(
+                                    expected_price * 1.01
+                                )
+
+                                order_no = buy(
+                                    token,
+                                    state["candidate_code"],
+                                    buy_price,
+                                )
+
+                                log(
+                                    f"O_{order_no}"
+                                    if order_no
+                                    else "★ORDER"
+                                )
 
             # 15:15 토큰 갱신 및 시스템 점검
             if (

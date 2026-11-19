@@ -14,6 +14,9 @@ else:
 	APP_KEY = "PObxSf_yWNbRgWVlM7fzRkwbgE-bfjcETJyT4HYmPJ4"
 	SECRET_KEY = "490D2XhJt3_mIhX4VuXu_pZLnlhQE3Z0fWK0LzuBU-E"
 	
+# 주도주 신규 검색 및 매수 허용 (기존 보유분 매도 관리는 유지)
+LEAD_TRADING_ENABLED = True
+
 BUY_RATIO = 2.48  # 2.5배 미수 대신 수수료/오차 고려
 BUY_PRICE_BUFFER_RATE = 0.01 # 예) 1.0 = 예상체결가 + 1%
 TAKE_PROFIT_RATE = 0.05   # (익절) +5%
