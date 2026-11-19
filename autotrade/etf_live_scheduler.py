@@ -109,7 +109,7 @@ class EtfLiveScheduler:
                 print(f"[ETF 주문 상태] {status}")
                 self.last_logged_status = status
             if status in ("BUY_SUBMITTED", "SELL_SUBMITTED", "BUY_FAILED", "SELL_FAILED"):
-                log(f"ETF_{status}")
+                print(f"ETF_{status}")
         except Exception as exc:
             print(f"[ETF 주문 처리 오류] {exc}")
             log(f"★ETF_RECONCILE_{type(exc).__name__}")
@@ -124,7 +124,7 @@ class EtfLiveScheduler:
                 print(f"[ETF 15:20 청산] {status}")
                 self.last_logged_status = status
             if status in ("CLOSING_SELL_SUBMITTED", "CLOSING_SELL_FAILED", "CANCEL_REQUESTED"):
-                log(f"ETF_{status}")
+                print(f"ETF_{status}")
         except Exception as exc:
             print(f"[ETF 청산 처리 오류] {exc}")
             log(f"★ETF_CLOSING_{type(exc).__name__}")
