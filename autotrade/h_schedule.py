@@ -3,13 +3,15 @@ import time
 import requests
 import json
 
+from kospi_ma20_filter import refresh_kospi_ma20_gate, read_kospi_ma20_gate
 from etf_history_archive import archive_program_history
 from etf_live_scheduler import EtfLiveScheduler
 from datetime import datetime, date
 from telegram_log import log
 from a_config import (
-    LEAD_TRADING_ENABLED,
 	TOKEN_TIME,
+	LEAD_TRADING_ENABLED,
+	LEAD_KOSPI_MA20_ENABLED,
 	NXT_TAKE_PROFIT_TIME,
 	KRX_TAKE_PROFIT_TIME,
 	MONITOR_START_TIME,
@@ -499,6 +501,11 @@ async def main():
                                 summary=summary,
                             )
 
+                            # 주도주 검색과 별도로 시장 필터를 갱신한다.
+                            # 실패해도 후보 검색/알림은 유지하고 신규 매수만 차단한다.
+                            if LEAD_KOSPI_MA20_ENABLED:
+                                await asyncio.to_thread(refresh_kospi_ma20_gate, token, now.date())
+
                             state = load_state()
 
                             if summary.get("has_holding"):
@@ -593,58 +600,62 @@ async def main():
             ):
                 executed["buy"] = True
 
-                if not LEAD_TRADING_ENABLED:
-                    log("SKIP_LEAD_DISABLED_BUY")
-                else:
-                    token, websocket = await ensure_websocket(
-                        token,
-                        websocket,
-                    )
+                token, websocket = await ensure_websocket(
+                    token,
+                    websocket,
+                )
 
-                    if websocket is None:
-                        log("★WEBSK_BUY")
+                if websocket is None:
+                    log("★WEBSK_BUY")
+
+                else:
+                    state = load_state()
+                    summary = get_account_summary(token)
+
+                    if summary.get("cash") is None:
+                        log("★ACCOUNT_BUY")
+
+                    elif summary.get("has_holding"):
+                        log("SKIP_BUY_HOLDING")
+
+                    elif not state.get("candidate_code"):
+                        log("No_B")
+
+                    elif state.get("buy_order_no"):
+                        log("SKIP_BUY_ORDER_EXISTS")
+
+                    elif not LEAD_TRADING_ENABLED:
+                        log("SKIP_LEAD_DISABLED")
+
+                    elif LEAD_KOSPI_MA20_ENABLED and not read_kospi_ma20_gate(now.date()):
+                        # 필터 미확인/조회 실패/20일선 이하: 신규 주문 금지
+                        log("SKIP_LEAD_KOSPI_MA20")
 
                     else:
-                        state = load_state()
-                        summary = get_account_summary(token)
+                        expected_price = websocket.price_data.get(
+                            "expected_price",
+                            0,
+                        )
 
-                        if summary.get("cash") is None:
-                            log("★ACCOUNT_BUY")
-
-                        elif summary.get("has_holding"):
-                            log("SKIP_BUY_HOLDING")
-
-                        elif not state.get("candidate_code"):
-                            log("No_B")
-
-                        elif state.get("buy_order_no"):
-                            log("SKIP_BUY_ORDER_EXISTS")
+                        if expected_price <= 0:
+                            log("★EXPECTED_PRICE")
 
                         else:
-                            expected_price = websocket.price_data.get(
-                                "expected_price",
-                                0,
+                            buy_price = get_upper_price(
+                                expected_price * 1.01
                             )
 
-                            if expected_price <= 0:
-                                log("★EXPECTED_PRICE")
+                            order_no = buy(
+                                token,
+                                state["candidate_code"],
+                                buy_price,
+                            )
 
-                            else:
-                                buy_price = get_upper_price(
-                                    expected_price * 1.01
-                                )
-
-                                order_no = buy(
-                                    token,
-                                    state["candidate_code"],
-                                    buy_price,
-                                )
-
-                                log(
-                                    f"O_{order_no}"
-                                    if order_no
-                                    else "★ORDER"
-                                )
+                            log(
+                                f"O_{order_no}"
+                                if order_no
+                                else "★ORDER"
+                            )
 
             # 15:15 토큰 갱신 및 시스템 점검
             if (
