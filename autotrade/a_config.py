@@ -15,7 +15,7 @@ else:
 	SECRET_KEY = "490D2XhJt3_mIhX4VuXu_pZLnlhQE3Z0fWK0LzuBU-E"
 	
 # 주도주 신규 검색 및 매수 허용 (기존 보유분 매도 관리는 유지)
-LEAD_TRADING_ENABLED = True
+LEAD_TRADING_ENABLED = False # 주도주 켜기 : True / 주도주 끄기 : False
 
 BUY_RATIO = 2.48  # 2.5배 미수 대신 수수료/오차 고려
 BUY_PRICE_BUFFER_RATE = 0.01 # 예) 1.0 = 예상체결가 + 1%
