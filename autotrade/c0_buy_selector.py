@@ -73,9 +73,7 @@ def get_buy_code(token, codes):
 
 		# 텔레그램 전송
 		candidate_codes = [code for code, market_cap in sorted_candidates]
-		log(
-			"FINAL CANDIDATES\n"
-			+ ", ".join(candidate_codes))
+		log("CANDI : " + ", ".join(candidate_codes))
 
 		# 시총이 가장 작은 종목을 최종 매수 종목으로 선택
 		buy_code = sorted_candidates[0][0]
@@ -87,5 +85,5 @@ def get_buy_code(token, codes):
 		return buy_code
 
 	print("No Final Candidates Found")
-	log("FINAL CANDIDATES NONE")
+	log("CANDI : NONE")
 	return None
