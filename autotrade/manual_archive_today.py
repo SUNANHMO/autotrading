@@ -8,6 +8,8 @@ from etf_history_archive import archive_program_history
 
 
 def main():
+    if datetime.now().weekday() >= 5:
+        raise SystemExit("주말에는 당일 수급 이력을 저장하지 않습니다")
     token = get_token()
     if not token:
         raise SystemExit("키움 인증 토큰을 받지 못했습니다")

@@ -129,6 +129,21 @@ def sync_account_state(token, origin="existing", summary=None):
 	return True
 
 
+_history_alerts = set()
+_history_alert_day = None
+
+
+def history_alert_once(message):
+	global _history_alert_day
+	today = date.today()
+	if _history_alert_day != today:
+		_history_alerts.clear()
+		_history_alert_day = today
+	if message not in _history_alerts:
+		_history_alerts.add(message)
+		log(message)
+
+
 def check_program_history(token, stock_code="005930", *, persist_live=True):
 	"""전체 페이지와 수급 금액을 검증한 뒤에만 과거 데이터를 저장한다."""
 	import os
@@ -148,6 +163,10 @@ def check_program_history(token, stock_code="005930", *, persist_live=True):
 		"stk_cd": stock_code,
 		"date": datetime.now().strftime("%Y%m%d"),
 	}
+
+	if date.today().weekday() >= 5:
+		print("[수급 조회 생략] 주말")
+		return None
 
 	all_rows = []
 	seen_keys = set()
@@ -202,20 +221,12 @@ def check_program_history(token, stock_code="005930", *, persist_live=True):
 				if row.get("stk_cd") not in (None, "", stock_code):
 					raise ValueError(f"{tm} 종목코드 불일치")
 
-				# 키움 연속조회에서 동일 시각의 동일 행이 반복될 수 있다.
-				# 완전히 동일한 행만 제거하고, 같은 시각에 값이 다르면 중단한다.
+				# 일반 거래량 등의 차이는 허용하되 프로그램 금액 충돌은 거부.
 				if tm in seen_times:
-					if not persist_live:
-						# 보관 전용: API 반환 순서에서 마지막 행을 대표값으로 사용.
-						# 응답 순서가 실제 발생 시각 순서라는 보장은 없다.
-						seen_times[tm] = row
-						duplicate_count += 1
-						continue
-					if row != seen_times[tm]:
-						raise ValueError(
-							 f"동일 시각 수급 내용 불일치: {tm}, "
-							 f"이전={seen_times[tm]}, 현재={row}"
-							)
+					previous = seen_times[tm]
+					fields = ("prm_netprps_amt", "prm_buy_amt", "prm_sell_amt")
+					if any(parse_amount(previous[k]) != parse_amount(row[k]) for k in fields):
+						raise ValueError(f"동일 시각 프로그램 금액 불일치: {tm}")
 					duplicate_count += 1
 					continue
 
@@ -287,7 +298,7 @@ def check_program_history(token, stock_code="005930", *, persist_live=True):
 		return all_rows
 
 	except (requests.RequestException, ValueError, TypeError, OSError) as exc:
-		log(f"★HISTORY_INVALID_{type(exc).__name__}")
+		history_alert_once(f"★HISTORY_INVALID_{type(exc).__name__}")
 		print(f"[과거 수급 조회 실패] 기존 파일 유지: {exc}")
 		return None
 
@@ -343,7 +354,16 @@ async def main():
                     "search": 0.0,
                 }
 
-                log(f"DAY_{now:%m%d}")
+                if now.weekday() < 5:
+                    log(f"DAY_{now:%m%d}")
+
+            # 주말에는 인증, 주문, 조회 및 날짜별 저장을 모두 중단한다.
+            if now.weekday() >= 5:
+                if websocket is not None:
+                    await websocket.stop()
+                    websocket = None
+                await asyncio.sleep(30)
+                continue
 
             if not executed["history_test"] and token is None:
                 token = get_token()
@@ -393,10 +413,10 @@ async def main():
                             print("ETF 과거 수급 최신성 검사 통과")
                             etf_live.initialize(history_rows, now)
                         else:
-                            log("★ETF_HISTORY_STALE_OR_INCOMPLETE")
+                            history_alert_once("★ETF_HISTORY_STALE_OR_INCOMPLETE")
                             print(f"[ETF 과거 수급 미완료] 최초={first_time}, 최신={latest_time}, 지연={age:.0f}초")
                     else:
-                        log("★ETF_HISTORY_NO_MARKET_ROWS")
+                        history_alert_once("★ETF_HISTORY_NO_MARKET_ROWS")
 
             # ETF 감시 준비는 MONITOR_START_TIME부터, 실제 주문은 09:00 이후.
             # 미체결 대기/호가 고정/주도주 우선 로직은 그대로 유지한다.
@@ -797,7 +817,7 @@ async def main():
                           f"{'갱신' if archive_updated else '기존 파일 유지'}")
                 except Exception as archive_exc:
                     print(f"[수급 날짜별 저장 실패] {archive_exc}")
-                    log(f"★HISTORY_ARCHIVE_{type(archive_exc).__name__}")
+                    history_alert_once(f"★HISTORY_ARCHIVE_{type(archive_exc).__name__}")
 
             await asyncio.sleep(0.1)
 

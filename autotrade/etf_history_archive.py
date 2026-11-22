@@ -14,6 +14,8 @@ def archive_program_history(rows, *, trading_date=None, directory=None):
     day = trading_date or datetime.now().strftime("%Y%m%d")
     if len(day) != 8 or not day.isdigit() or datetime.strptime(day, "%Y%m%d").strftime("%Y%m%d") != day:
         raise ValueError("날짜 형식 오류")
+    if datetime.strptime(day, "%Y%m%d").weekday() >= 5:
+        raise ValueError("주말 날짜로 수급 이력을 저장할 수 없습니다")
     directory = Path(directory) if directory is not None else Path(__file__).resolve().parent
     output = directory / f"program_history_{day}.json"
     simplified = []
