@@ -70,5 +70,5 @@ async def process_check(token, websocket, check_type):
 	if ok:
 		print("SYS")
 	else:
-		log(" ".join(result))
+		print(" ".join(result))
 	return ok
