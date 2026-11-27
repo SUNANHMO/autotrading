@@ -26,6 +26,7 @@ def collect(session, host, token, spec, start, end, root, max_pages):
                'api-id': api, 'cont-yn': 'N', 'next-key': ''}
     rows, keys = {}, set()
     skipped = 0
+    repaired = 0
     reason = 'page limit'
     for page in range(1, max_pages + 1):
         for attempt in range(4):
@@ -50,14 +51,26 @@ def collect(session, host, token, spec, start, end, root, max_pages):
             oldest = min(oldest or day, day)
             if not start <= day <= end:
                 continue
-            # Keep the closing auction bar, exclude post-session records.
-            if stamp[8:] > '153000':
+            # Index chart includes the final 15:31 record; ETF scope unchanged.
+            cutoff = '153100' if index else '153000'
+            if stamp[8:] > cutoff:
                 skipped += 1
                 continue
             prices = [int(str(row[k]).replace(',', '')) for k in ('open_pric','high_pric','low_pric','cur_prc')]
             o,h,l,c = list(map(abs, prices))
             if not (0 < l <= min(o,c) <= max(o,c) <= h):
-                raise ValueError(f'Invalid OHLC: {name} {stamp} raw={prices} normalized={[o,h,l,c]}')
+                # Only repair a final index settlement record with a valid close
+                # and OHLC fields that are either zero or equal to that close.
+                # Preserve the original API row in a separate audit field.
+                if index and stamp[8:] == '153100' and c > 0 and all(v in (0, c) for v in (o,h,l)):
+                    row = dict(row)
+                    row['_raw_ohlc'] = {k: row[k] for k in ('open_pric','high_pric','low_pric','cur_prc')}
+                    for k in ('open_pric','high_pric','low_pric'):
+                        row[k] = row['cur_prc']
+                    repaired += 1
+                    print(f'  normalized final index bar {stamp}: {prices} -> {c}', flush=True)
+                else:
+                    raise ValueError(f'Invalid OHLC: {name} {stamp} raw={prices} normalized={[o,h,l,c]}')
             if stamp in rows and rows[stamp] != row:
                 raise ValueError(f'Conflicting duplicate: {name} {stamp}')
             rows[stamp] = row
@@ -95,8 +108,10 @@ def collect(session, host, token, spec, start, end, root, max_pages):
         os.replace(tmp, path)
         times = [datetime.strptime(str(r['cntr_tm']), '%Y%m%d%H%M%S') for r in items]
         gaps = sum((b-a).total_seconds() > minutes*60 for a,b in zip(times,times[1:]))
+        if index and minutes == 1 and not any(str(r['cntr_tm'])[8:] == '153100' for r in items):
+            print(f'  WARNING {day}: final 15:31 index bar missing; verify chart before backtest', flush=True)
         print(f'  {day}: {len(items)} bars {times[0]:%H:%M}–{times[-1]:%H:%M}, internal gaps={gaps}')
-    print(f'{name}/{minutes}m: {len(grouped)} days, {reason}, post-session skipped={skipped}')
+    print(f'{name}/{minutes}m: {len(grouped)} days, {reason}, post-session skipped={skipped}, final bars normalized={repaired}')
     if not grouped:
         raise RuntimeError('No bars in requested date range')
     return set(grouped)
