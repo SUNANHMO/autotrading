@@ -6,6 +6,7 @@ import json
 from kospi_ma20_filter import refresh_kospi_ma20_gate, read_kospi_ma20_gate
 from lead_candidate_history import save_candidate_history
 from etf_history_archive import archive_program_history
+from market_program_archive import collect_today
 from etf_live_scheduler import EtfLiveScheduler
 from datetime import datetime, date
 from telegram_log import log
@@ -818,6 +819,14 @@ async def main():
                 except Exception as archive_exc:
                     print(f"[수급 날짜별 저장 실패] {archive_exc}")
                     history_alert_once(f"★HISTORY_ARCHIVE_{type(archive_exc).__name__}")
+
+                # Independent read-only market research archive after existing close processing.
+                try:
+                    market_token = token or await asyncio.to_thread(get_token)
+                    await asyncio.to_thread(collect_today, market_token)
+                except Exception as market_exc:
+                    print(f"[코스피 프로그램 저장 실패] {type(market_exc).__name__}: {market_exc}")
+
 
             await asyncio.sleep(0.1)
 

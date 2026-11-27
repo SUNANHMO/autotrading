@@ -124,7 +124,15 @@ def main():
     parser.add_argument('--end', default=(today-timedelta(days=1)).strftime('%Y%m%d'))
     parser.add_argument('--output', type=Path, default=Path(__file__).resolve().parent/'backtest_data')
     parser.add_argument('--max-pages', type=int, default=2000)
+    parser.add_argument('--market-program-today', action='store_true', help='Collect only today’s KRX market program ticks')
     args = parser.parse_args()
+    if args.market_program_today:
+        if args.max_pages < 1:
+            parser.error('max-pages >= 1 required')
+        from b_auth import get_token
+        from market_program_archive import collect_today
+        collect_today(get_token(), args.output, args.max_pages)
+        return
     start,end = [datetime.strptime(v,'%Y%m%d').date() for v in (args.start,args.end)]
     if not start <= end < today or args.max_pages < 1:
         parser.error('Require start <= end < today (KST), max-pages >= 1')

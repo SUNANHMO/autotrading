@@ -5,7 +5,6 @@ import os
 import time
 from datetime import datetime
 
-from a_config import ETF_DC20_ENABLED
 from etf_execution import reconcile_etf
 from etf_state import load_state, save_state
 from etf_strategy import replay_virtual_history, update_virtual_position
@@ -18,7 +17,6 @@ class EtfLiveScheduler:
 
     def reset_day(self):
         self.ready = False
-        self.mode_change_blocked = False
         self.last_order_check = 0.0
         self.last_close_check = 0.0
         self.last_logged_status = None
@@ -27,31 +25,11 @@ class EtfLiveScheduler:
     def initialize(self, rows, now):
         # 과거 이력의 실제 마지막 시각까지 재생해 신호 기준점을 복원한다.
         cutoff = now.strftime("%H%M%S")
-        before = load_state()
         pos, count, last_time, net = replay_virtual_history(
             rows, trading_date=now.strftime("%Y%m%d"), cutoff_time=cutoff)
-        state = load_state()
-        old_mode = state.get("execution_dc20_enabled")
-        same_day = before.get("date") == now.strftime("%Y%m%d")
-        if same_day and old_mode != ETF_DC20_ENABLED and (old_mode is not None or not ETF_DC20_ENABLED):
-            self.mode_change_blocked = True
-            print("[ETF] 장중 전략 변경 감지: 신규 장중 주문 차단, 마감 청산 유지")
-        if not self.mode_change_blocked and (old_mode != ETF_DC20_ENABLED or (not ETF_DC20_ENABLED and not same_day)):
-            # 기존 DC20 신호 가격을 최초 진입 주문에 재사용하지 않는다.
-            # 모드 변경은 장 시작 전 잔고/미체결이 없는 상태에서만 수행해야 한다.
-            if old_mode is not None or not ETF_DC20_ENABLED:
-                state.update(signal_target=None, signal_prices={},
-                             signal_initial_entry=False, pending_quote_target=None,
-                             pending_quote_required=None)
-            state["execution_dc20_enabled"] = ETF_DC20_ENABLED
-            save_state(state)
         self.ready = True
         print(f"[ETF 가상 방향 복원] {pos}, {count}건, 마지막={last_time}, 순매수={net}")
         # 과거 신호에 대한 호가가 없으므로 과거 신호로 소급 주문하지 않는다.
-
-    @staticmethod
-    def _execution_target(state):
-        return state.get("virtual_position" if ETF_DC20_ENABLED else "first_position", "NONE")
 
     @staticmethod
     def _flow(now):
@@ -106,12 +84,11 @@ class EtfLiveScheduler:
                     quotes = self._capture_quotes(websocket, required)
                     # 신호 시점 호가가 없으면 최신 방향에 한해 호가 수신을 기다린다.
                     # 가격 확보 후에는 최초 확보 가격으로 고정하고 추격하지 않는다.
-                    if ETF_DC20_ENABLED or previous == "NONE":
-                        state["signal_target"] = target if quotes else None
-                        state["signal_prices"] = quotes or {}
-                        state["signal_initial_entry"] = previous == "NONE"
-                        state["pending_quote_required"] = list(required) if not quotes else None
-                        state["pending_quote_target"] = target if (not quotes and target in ("KODEX200", "INVERSE")) else None
+                    state["signal_target"] = target if quotes else None
+                    state["signal_prices"] = quotes or {}
+                    state["signal_initial_entry"] = previous == "NONE"
+                    state["pending_quote_required"] = list(required) if not quotes else None
+                    state["pending_quote_target"] = target if (not quotes and target in ("KODEX200", "INVERSE")) else None
                     # 전환 전 ETF의 매도 1호가 / 전환 후 ETF의 매수 1호가를 알린다.
                     symbols = {"KODEX200": "U", "INVERSE": "D", "NONE": "N"}
                     direction = f"{symbols.get(previous, previous)}>{symbols.get(target, target)}"
@@ -133,7 +110,7 @@ class EtfLiveScheduler:
         state = load_state()
         pending = state.get("pending_quote_target")
         if pending in ("KODEX200", "INVERSE"):
-            if self._execution_target(state) != pending:
+            if state.get("virtual_position") != pending:
                 state["pending_quote_target"] = None
                 state["pending_quote_required"] = None
                 save_state(state)
@@ -148,18 +125,12 @@ class EtfLiveScheduler:
                     save_state(state)
                     print(f"[ETF 지연 호가 확보] {pending}, 매수호가={quotes[pending]['bid']}, 주문 재개")
 
-        if self.mode_change_blocked:
-            return
-
         # 주문 진행 상태는 수급 이벤트가 없어도 계좌/미체결 조회로 갱신한다.
         if time.monotonic() - self.last_order_check < 2.0:
             return
         self.last_order_check = time.monotonic()
         state = load_state()
-        target = self._execution_target(state)
-        if not ETF_DC20_ENABLED and state.get("active_stage") and state.get("active_target") != target:
-            print("[ETF] 기존 주문 계획과 최초 방향 불일치: 장중 주문 보류")
-            return
+        target = state.get("virtual_position", "NONE")
         try:
             status = await asyncio.to_thread(reconcile_etf, token, websocket, target)
             if status != self.last_logged_status:

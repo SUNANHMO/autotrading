@@ -37,15 +37,13 @@ def update_virtual_position(net_amount, *, trading_date=None):
     state = load_state()
     if trading_date and state.get("date") != trading_date:
         state.update(date=trading_date, virtual_position="NONE",
-                     virtual_high=None, virtual_low=None, first_position="NONE",
+                     virtual_high=None, virtual_low=None,
                      dc_daily_high=None, dc_daily_low=None, last_flow_time=None)
     net = int(net_amount)
     result = _advance(state.get("virtual_position", "NONE"), net,
                       state.get("dc_daily_high"), state.get("dc_daily_low"),
                       state.get("virtual_high"), state.get("virtual_low"))
     position, day_high, day_low, high, low = result
-    if state.get("first_position", "NONE") == "NONE" and position != "NONE":
-        state["first_position"] = position
     state.update(virtual_position=position, dc_daily_high=day_high,
                  dc_daily_low=day_low, virtual_high=high, virtual_low=low,
                  current_net_amount=net)
@@ -65,7 +63,6 @@ def replay_virtual_history(rows, *, trading_date, cutoff_time):
     position, day_high, day_low, high, low = "NONE", None, None, None, None
     last_time, last_net = None, None
     transitions = []
-    first_position = "NONE"
     for row in selected:
         net = parse_amount(str(row["prm_netprps_amt"]))
         buy = parse_amount(str(row["prm_buy_amt"]))
@@ -76,8 +73,6 @@ def replay_virtual_history(rows, *, trading_date, cutoff_time):
         position, day_high, day_low, high, low = _advance(
             position, net, day_high, day_low, high, low)
         if position != previous:
-            if first_position == "NONE":
-                first_position = position
             tm = str(row["tm"]).zfill(6)
             clock = f"{tm[:2]}:{tm[2:4]}:{tm[4:6]}"
             action = (f"{position} 최초 진입" if previous == "NONE"
@@ -85,7 +80,7 @@ def replay_virtual_history(rows, *, trading_date, cutoff_time):
             transitions.append((clock, action, net))
         last_time, last_net = str(row["tm"]), net
     state = load_state()
-    state.update(date=trading_date, virtual_position=position, first_position=first_position,
+    state.update(date=trading_date, virtual_position=position,
                  dc_daily_high=day_high, dc_daily_low=day_low,
                  virtual_high=high, virtual_low=low,
                  last_flow_time=last_time, current_net_amount=last_net)

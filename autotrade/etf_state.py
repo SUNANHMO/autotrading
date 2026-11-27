@@ -8,8 +8,6 @@ def default_state():
     return {
         "date": None,
         "virtual_position": "NONE",
-        "first_position": "NONE",
-        "execution_dc20_enabled": None,
         "virtual_high": None,
         "virtual_low": None,
         "last_flow_time": None,

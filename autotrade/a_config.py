@@ -64,8 +64,4 @@ AFTERNOON_CHECK_TIME = shift_time("15:20:05")
 # 전환 기준: 200억 원 (단위: 백만 원)
 REVERSE_AMOUNT = 0.2
 
-# ETF 실주문 전략: True = DC20, False = 최초 방향 유지
-# 장 시작 전, ETF 잔고/미체결이 없는 상태에서 변경 권장
-ETF_DC20_ENABLED = False
-
 ETF_FLOW_MAX_AGE_SECONDS = 30
