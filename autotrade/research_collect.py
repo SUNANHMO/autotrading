@@ -25,6 +25,7 @@ def collect(session, host, token, spec, start, end, root, max_pages):
     headers = {'Content-Type': 'application/json;charset=UTF-8', 'authorization': f'Bearer {token}',
                'api-id': api, 'cont-yn': 'N', 'next-key': ''}
     rows, keys = {}, set()
+    skipped = 0
     reason = 'page limit'
     for page in range(1, max_pages + 1):
         for attempt in range(4):
@@ -49,10 +50,14 @@ def collect(session, host, token, spec, start, end, root, max_pages):
             oldest = min(oldest or day, day)
             if not start <= day <= end:
                 continue
+            # Keep the closing auction bar, exclude post-session records.
+            if stamp[8:] > '153000':
+                skipped += 1
+                continue
             prices = [int(str(row[k]).replace(',', '')) for k in ('open_pric','high_pric','low_pric','cur_prc')]
-            o,h,l,c = prices if index else list(map(abs, prices))
+            o,h,l,c = list(map(abs, prices))
             if not (0 < l <= min(o,c) <= max(o,c) <= h):
-                raise ValueError(f'Invalid OHLC: {name} {stamp}')
+                raise ValueError(f'Invalid OHLC: {name} {stamp} raw={prices} normalized={[o,h,l,c]}')
             if stamp in rows and rows[stamp] != row:
                 raise ValueError(f'Conflicting duplicate: {name} {stamp}')
             rows[stamp] = row
@@ -91,7 +96,7 @@ def collect(session, host, token, spec, start, end, root, max_pages):
         times = [datetime.strptime(str(r['cntr_tm']), '%Y%m%d%H%M%S') for r in items]
         gaps = sum((b-a).total_seconds() > minutes*60 for a,b in zip(times,times[1:]))
         print(f'  {day}: {len(items)} bars {times[0]:%H:%M}–{times[-1]:%H:%M}, internal gaps={gaps}')
-    print(f'{name}/{minutes}m: {len(grouped)} days, {reason}')
+    print(f'{name}/{minutes}m: {len(grouped)} days, {reason}, post-session skipped={skipped}')
     if not grouped:
         raise RuntimeError('No bars in requested date range')
     return set(grouped)
