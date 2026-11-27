@@ -138,6 +138,10 @@ class EtfLiveScheduler:
                 self.last_logged_status = status
             if status in ("BUY_SUBMITTED", "SELL_SUBMITTED", "BUY_FAILED", "SELL_FAILED"):
                 print(f"ETF_{status}")
+        except json.JSONDecodeError as exc:
+            # 응답 파싱 실패 시 이번 조회를 중단하고 다음 주기에 계좌/미체결을 재확인한다.
+            # 일시적인 JSON 오류는 콘솔에만 기록한다.
+            print(f"[ETF 주문 처리 JSON 오류 / 재조회 대기] {exc}")
         except Exception as exc:
             print(f"[ETF 주문 처리 오류] {exc}")
             log(f"★ETF_RECONCILE_{type(exc).__name__}")
